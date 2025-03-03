@@ -1,9 +1,8 @@
 ARG PYTHON_VERSION=3.13
-ARG IMAGE_TYPE=alpine
 
-FROM python:${PYTHON_VERSION}-${IMAGE_TYPE} as build
+FROM python:${PYTHON_VERSION}-alpine as build
 
-COPY --from=ghcr.io/astral-sh/uv:${IMAGE_TYPE} /uv /bin/
+COPY --from=ghcr.io/astral-sh/uv:alpine /uv /bin/
 
 # Change the working directory to the `app` directory
 WORKDIR /app
@@ -15,7 +14,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-editable --compile-bytecode
 
 
-#FROM python:${PYTHON_VERSION}-${IMAGE_TYPE}
+#FROM python:${PYTHON_VERSION}-alpine
 FROM alpine:latest
 
 WORKDIR /app
