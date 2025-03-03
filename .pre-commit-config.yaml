@@ -24,6 +24,10 @@ repos:
         exclude: data/
       - id: detect-private-key
         always_run: true
+  - repo: https://github.com/ComPWA/taplo-pre-commit  # TOML formatter
+    rev: v0.9.3
+    hooks:
+      - id: taplo-format
   - repo: https://github.com/bwhmather/ssort
     rev: 0.14.0
     hooks:

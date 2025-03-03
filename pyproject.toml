@@ -3,30 +3,48 @@ name = "gsm-sms-telegram-bot"
 version = "0.1.0"
 description = "Send and receive SMS via Telegram using a GSM modem."
 authors = [
-    { name = "jag_k", email = "30597878+jag-k@users.noreply.github.com" },
+  { name = "jag_k", email = "30597878+jag-k@users.noreply.github.com" },
 ]
 readme = "README.md"
 requires-python = ">=3.13"
+license = { text = "MIT" }
+license-files = ["LICEN[CS]E*"]
+keywords = ["telegram-bot", "sms", "sms-messages", "gsm", "gsm-modem"]
 dependencies = [
-    "pydantic>=2.10.6",
-    "pydantic-extra-types[phonenumbers]>=2.10.2",
-    "pydantic-settings>=2.8.1",
-    "pyserial>=3.5",
-    "pyserial-asyncio>=0.6",
-    "python-messaging>=0.5.13",
-    "python-telegram-bot>=21.11.1",
+  "pydantic>=2.10.6",
+  "pydantic-extra-types[phonenumbers]>=2.10.2",
+  "pydantic-settings>=2.8.1",
+  "pyserial>=3.5",
+  "pyserial-asyncio>=0.6",
+  "python-messaging>=0.5.13",
+  "python-telegram-bot>=21.11.1",
 ]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Communications :: Telephony",
+  "Topic :: Utilities",
+]
+
+[project.urls]
+Homepage = "https://github.com/jag-k/gsm-sms-telegram-bot"
+Documentation = "https://github.com/jag-k/gsm-sms-telegram-bot#readme"
+Repository = "https://github.com/jag-k/gsm-sms-telegram-bot.git"
+Issues = "https://github.com/jag-k/gsm-sms-telegram-bot/issues"
+"Docker Image" = "https://github.com/jag-k/gsm-sms-telegram-bot/pkgs/container/gsm-sms-telegram-bot"
 
 [dependency-groups]
 dev = [
-    "mypy>=1.15.0",
-    "pre-commit>=4.1.0",
-    "pydantic-settings-export>=1.0.0",
-    "ruff>=0.9.9",
-    "ssort>=0.14.0",
-    "types-cachetools>=5.5.0.20240820",
-    "types-pytz>=2025.1.0.20250204",
-    "types-pyyaml>=6.0.12.20241230",
+  "mypy>=1.15.0",
+  "pre-commit>=4.1.0",
+  "pydantic-settings-export>=1.0.0",
+  "ruff>=0.9.9",
+  "ssort>=0.14.0",
+  "types-cachetools>=5.5.0.20240820",
+  "types-pytz>=2025.1.0.20250204",
+  "types-pyyaml>=6.0.12.20241230",
 ]
 
 # https://mypy.readthedocs.io/en/stable/config_file.html
@@ -44,13 +62,13 @@ show_error_codes = true
 color_output = false
 pretty = true
 exclude = [
-    '^setup\.py$',
-    '^tmp\.py$',
-    '^venv/',
-    '^test+\.py$',
-    '^conftest\.py$',
-    '^tests/',
-    '^prompt\.py$',
+  '^setup\.py$',
+  '^tmp\.py$',
+  '^venv/',
+  '^test+\.py$',
+  '^conftest\.py$',
+  '^tests/',
+  '^prompt\.py$',
 ]
 disable_error_code = ["call-arg", "valid-type"]
 enable_incomplete_feature = ["PreciseTupleTypes"]
@@ -70,25 +88,25 @@ src = ["app"]
 # https://docs.astral.sh/ruff/settings/#lint
 [tool.ruff.lint]
 select = [
-    'F', # flake8
-    # 'C90', # mccabe
-    'I', # isort
-    'UP', # pyupgrade
-    'S', # flake8-bandit
-    'ASYNC', # flake8-async
-    'B', # flake8-bugbear
-    'Q', # flake8-quotes
-    'TCH', # flake8-type-checking
-    'PTH', # flake8-use-pathlib
-    # 'D', # pydocstyle
-    'W', # pycodestyle (warnings)
-    'E', # pycodestyle (errors)
-    'N', # pep8-naming
-    'PT', # flake8-pytest-style
-    'PL', # pylint
-    'FAST', # FastAPI
-    'TID', # flake8-tidy-imports
-    'RUF', # ruff-specific rules
+  'F', # flake8
+  # 'C90', # mccabe
+  'I',     # isort
+  'UP',    # pyupgrade
+  'S',     # flake8-bandit
+  'ASYNC', # flake8-async
+  'B',     # flake8-bugbear
+  'Q',     # flake8-quotes
+  'TCH',   # flake8-type-checking
+  'PTH',   # flake8-use-pathlib
+  # 'D', # pydocstyle
+  'W',    # pycodestyle (warnings)
+  'E',    # pycodestyle (errors)
+  'N',    # pep8-naming
+  'PT',   # flake8-pytest-style
+  'PL',   # pylint
+  'FAST', # FastAPI
+  'TID',  # flake8-tidy-imports
+  'RUF',  # ruff-specific rules
 ]
 
 ignore = ['UP040', 'TC001', 'TC002']
@@ -96,10 +114,10 @@ ignore = ['UP040', 'TC001', 'TC002']
 # https://docs.astral.sh/ruff/settings/#extend-per-file-ignores
 [tool.ruff.lint.extend-per-file-ignores]
 '__init__.py' = [
-    'F401', # {name} imported but unused; consider using importlib.util.find_spec to test for availability
-    'F403', # from {name} import * used; unable to detect undefined names
-    'F405', # {name} may be undefined, or defined from star imports
-    'TID252', # Relative imports from parent modules are banned
+  'F401',   # {name} imported but unused; consider using importlib.util.find_spec to test for availability
+  'F403',   # from {name} import * used; unable to detect undefined names
+  'F405',   # {name} may be undefined, or defined from star imports
+  'TID252', # Relative imports from parent modules are banned
 ]
 
 # https://docs.astral.sh/ruff/settings/#lintpylint
@@ -121,11 +139,11 @@ max-complexity = 6
 # https://docs.astral.sh/ruff/settings/#lintisort
 [tool.ruff.lint.isort]
 section-order = [
-    'future',
-    'standard-library',
-    'third-party',
-    'first-party',
-    'local-folder',
+  'future',
+  'standard-library',
+  'third-party',
+  'first-party',
+  'local-folder',
 ]
 lines-after-imports = 2
 lines-between-types = 1
