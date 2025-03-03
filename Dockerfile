@@ -3,13 +3,13 @@ ARG IMAGE_TYPE=alpine
 
 FROM python:${PYTHON_VERSION}-${IMAGE_TYPE} as build
 
+COPY --from=ghcr.io/astral-sh/uv:${IMAGE_TYPE} /uv /bin/
 
 # Change the working directory to the `app` directory
 WORKDIR /app
 
 # Install dependencies
-RUN --mount=from=ghcr.io/astral-sh/uv,source=/uv,target=/bin/uv \
-    --mount=type=cache,target=/root/.cache/uv \
+RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     uv sync --frozen --no-install-project --no-editable --compile-bytecode
