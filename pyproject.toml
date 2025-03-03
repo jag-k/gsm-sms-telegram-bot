@@ -1,0 +1,142 @@
+[project]
+name = "gsm-sms-telegram-bot"
+version = "0.1.0"
+description = "Send and receive SMS via Telegram using a GSM modem."
+authors = [
+    { name = "jag_k", email = "30597878+jag-k@users.noreply.github.com" },
+]
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "pydantic>=2.10.6",
+    "pydantic-extra-types[phonenumbers]>=2.10.2",
+    "pydantic-settings>=2.8.1",
+    "pyserial>=3.5",
+    "pyserial-asyncio>=0.6",
+    "python-messaging>=0.5.13",
+    "python-telegram-bot>=21.11.1",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.15.0",
+    "pre-commit>=4.1.0",
+    "pydantic-settings-export>=1.0.0",
+    "ruff>=0.9.9",
+    "ssort>=0.14.0",
+    "types-cachetools>=5.5.0.20240820",
+    "types-pytz>=2025.1.0.20250204",
+    "types-pyyaml>=6.0.12.20241230",
+]
+
+# https://mypy.readthedocs.io/en/stable/config_file.html
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true
+scripts_are_modules = true
+allow_redefinition = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+warn_no_return = false
+show_error_context = true
+show_column_numbers = true
+show_error_codes = true
+color_output = false
+pretty = true
+exclude = [
+    '^setup\.py$',
+    '^tmp\.py$',
+    '^venv/',
+    '^test+\.py$',
+    '^conftest\.py$',
+    '^tests/',
+    '^prompt\.py$',
+]
+disable_error_code = ["call-arg", "valid-type"]
+enable_incomplete_feature = ["PreciseTupleTypes"]
+
+
+[[tool.mypy.overrides]]
+module = ["src.config"]
+disable_error_code = ["arg-type"]
+
+# https://docs.astral.sh/ruff/
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+extend-exclude = [".idea", ".vscode", ".fleet"]
+src = ["app"]
+
+# https://docs.astral.sh/ruff/settings/#lint
+[tool.ruff.lint]
+select = [
+    'F', # flake8
+    # 'C90', # mccabe
+    'I', # isort
+    'UP', # pyupgrade
+    'S', # flake8-bandit
+    'ASYNC', # flake8-async
+    'B', # flake8-bugbear
+    'Q', # flake8-quotes
+    'TCH', # flake8-type-checking
+    'PTH', # flake8-use-pathlib
+    # 'D', # pydocstyle
+    'W', # pycodestyle (warnings)
+    'E', # pycodestyle (errors)
+    'N', # pep8-naming
+    'PT', # flake8-pytest-style
+    'PL', # pylint
+    'FAST', # FastAPI
+    'TID', # flake8-tidy-imports
+    'RUF', # ruff-specific rules
+]
+
+ignore = ['UP040', 'TC001', 'TC002']
+
+# https://docs.astral.sh/ruff/settings/#extend-per-file-ignores
+[tool.ruff.lint.extend-per-file-ignores]
+'__init__.py' = [
+    'F401', # {name} imported but unused; consider using importlib.util.find_spec to test for availability
+    'F403', # from {name} import * used; unable to detect undefined names
+    'F405', # {name} may be undefined, or defined from star imports
+    'TID252', # Relative imports from parent modules are banned
+]
+
+# https://docs.astral.sh/ruff/settings/#lintpylint
+[tool.ruff.lint.pylint]
+max-args = 12
+
+# https://docs.astral.sh/ruff/settings/#lintflake8-tidy-imports
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+# https://docs.astral.sh/ruff/settings/#lintpydocstyle
+[tool.ruff.lint.pydocstyle]
+convention = 'pep257'
+
+# https://docs.astral.sh/ruff/settings/#lintmccabe
+[tool.ruff.lint.mccabe]
+max-complexity = 6
+
+# https://docs.astral.sh/ruff/settings/#lintisort
+[tool.ruff.lint.isort]
+section-order = [
+    'future',
+    'standard-library',
+    'third-party',
+    'first-party',
+    'local-folder',
+]
+lines-after-imports = 2
+lines-between-types = 1
+
+
+[tool.pydantic_settings_export]
+project_dir = "."
+default_settings = ["src.config:Settings"]
+
+[[tool.pydantic_settings_export.generators.dotenv]]
+paths = [".env.example"]
+
+[[tool.pydantic_settings_export.generators.markdown]]
+paths = ["Configuration.md"]

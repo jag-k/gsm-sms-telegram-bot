@@ -1,0 +1,10 @@
+services:
+  sms:
+    image: ghcr.io/jag-k/gsm-sms-telegram-bot:latest
+    restart: unless-stopped
+    volumes:
+      - ./data:/data
+    devices:
+      - /dev/ttyUSB0:/dev/ttyUSB0
+    env_file:
+      - .env

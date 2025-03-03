@@ -1,0 +1,63 @@
+# https://pre-commit.com/
+default_stages: [pre-commit, pre-push]
+
+default_language_version:
+  python: python3.12
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-ast
+      - id: check-json
+      - id: pretty-format-json
+        args: [--autofix, --indent=4, --no-sort-keys]
+      - id: check-toml
+      - id: check-xml
+      - id: end-of-file-fixer
+        always_run: true
+      - id: check-docstring-first
+      - id: trailing-whitespace
+        exclude: .md$
+        always_run: true
+      - id: check-added-large-files
+        exclude: data/
+      - id: detect-private-key
+        always_run: true
+  - repo: https://github.com/bwhmather/ssort
+    rev: 0.14.0
+    hooks:
+      - id: ssort
+        entry: ssort
+        files: ^app/.*\.py$
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.9
+    hooks:
+      # Run the linter.
+      - id: ruff
+        files: ^src/.*\.py$
+        args: [--fix]
+      # Run the formatter.
+      - id: ruff-format
+        files: ^src/.*\.py$
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.15.0
+    hooks:
+      - id: mypy
+        name: mypy
+        files: ^src/.*\.py$
+        args: [--install-types, --non-interactive, --config-file=pyproject.toml]
+        additional_dependencies:
+          - types-PyYAML
+          - types-cachetools
+          - types-pytz
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    # uv version.
+    rev: 0.6.3
+    hooks:
+      - id: uv-lock
+  - repo: https://github.com/jag-k/pydantic-settings-export
+    rev: v1.0.0
+    hooks:
+      - id: pydantic-settings-export
+        files: ^src/config\.py$
