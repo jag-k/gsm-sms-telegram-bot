@@ -112,4 +112,4 @@ There are several ways to send SMS:
 
 ## License
 
-[MIT]
+[MIT](LICENSE)
