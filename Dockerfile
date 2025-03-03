@@ -2,7 +2,8 @@ ARG PYTHON_VERSION=3.13
 
 FROM python:${PYTHON_VERSION}-alpine as build
 
-COPY --from=ghcr.io/astral-sh/uv:alpine /uv /bin/
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install uv
 
 # Change the working directory to the `app` directory
 WORKDIR /app
