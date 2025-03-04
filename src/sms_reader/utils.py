@@ -140,6 +140,7 @@ def decode_pdu(sms_index: str, pdu_data: str) -> SMSMessage | None:
         # Extract UDH information for multipart messages
         udh_info = None
         if hasattr(sms, "udh") and sms.udh and sms.udh.headers:
+            logger.debug(f"UDH Headers: {sms.udh}")
             for ie in sms.udh.headers:
                 # Check for concatenated SMS information element (0x00 or 0x08)
                 if ie.iei in (0, 8):
