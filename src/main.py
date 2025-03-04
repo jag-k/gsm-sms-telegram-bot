@@ -1,4 +1,5 @@
 import asyncio
+import html
 import logging
 import re
 
@@ -198,11 +199,12 @@ class SMSBot:
         await self.store_sms_message(sms)
 
         # Format the message
+
         message_text = (
-            f"📩 *New SMS received*\n\n"
-            f"*From:* {sms.sender}\n"
-            f"*Time:* {sms.timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-            f"{sms.text}"
+            f"📩 <b>New SMS received</b>\n\n"
+            f"<b>From:</b> {sms.sender}\n"
+            f"<b>Time:</b> {sms.timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            f"<blockquote>{html.escape(sms.text)}</blockquote>"
         )
 
         # Send it to the allowed user with retry
@@ -211,7 +213,7 @@ class SMSBot:
                 app.bot.send_message,
                 chat_id=settings.bot.allowed_user_id,
                 text=message_text,
-                parse_mode=ParseMode.MARKDOWN,
+                parse_mode=ParseMode.HTML,
             )
         except Exception as e:
             logger.error(f"Failed to forward SMS to Telegram: {e}", exc_info=e)
@@ -326,13 +328,17 @@ class SMSBot:
         recent_messages = sorted_messages[: settings.bot.recent_messages_count]
 
         # Create response text
-        response = f"📋 *Recent SMS Messages* (showing {len(recent_messages)} of {total_messages})\n\n"
+        response = f"📋 <b>Recent SMS Messages</b> (showing {len(recent_messages)} of {total_messages})\n\n"
 
         for msg in recent_messages:
             timestamp = datetime.fromisoformat(msg["timestamp"]).strftime("%Y-%m-%d %H:%M")
-            response += f"*From:* {msg['sender']}\n*Time:* {timestamp}\n{msg['text']}\n\n"
+            response += (
+                f"<b>From:</b> {msg['sender']}\n"
+                f"<b>Time:</b> {timestamp}\n"
+                f"<blockquote>{html.escape(msg['text'])}</blockquote>\n\n"
+            )
 
-        await update.message.reply_text(response, parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(response, parse_mode=ParseMode.HTML)
 
     async def cmd_send(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """
