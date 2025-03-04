@@ -2,9 +2,11 @@ import datetime
 import html
 import logging
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, TypedDict
+from typing import Any
+
+from sms_reader.utils import now_utc
 
 
 logger = logging.getLogger(__name__)
@@ -78,11 +80,11 @@ class SMSMessage:
 
     index: str
     sender: str
-    clean_sender: str
     text: str
     timestamp: datetime.datetime
     is_alphanumeric: bool
     sender_type: int | None = None  # Type of address (0x91=international, 0x81=national, 0x50/0xD0=alphanumeric)
+    udh_info: dict | None = None  # UDH information for multipart messages
 
     @classmethod
     def from_dict(cls, data: dict) -> "SMSMessage":
@@ -102,11 +104,11 @@ class SMSMessage:
         return {
             "index": self.index,
             "sender": self.sender,
-            "clean_sender": self.clean_sender,
             "text": self.text,
             "timestamp": self.timestamp.isoformat(),
             "is_alphanumeric": self.is_alphanumeric,
             "sender_type": self.sender_type,
+            "udh_info": self.udh_info,
         }
 
     def to_html(self) -> str:
@@ -120,12 +122,13 @@ class SMSMessage:
         )
 
 
-class PendingMessage(TypedDict):
+@dataclass
+class PendingMessage:
     message: SMSMessage
-    timestamp: datetime.datetime
     parts: list[SMSMessage]
-    notified: bool  # Track if we've notified about this message
-    expected_parts: int | None  # Number of expected parts, if known
+    notified: bool = False  # Track if we've notified about this message
+    expected_parts: int | None = None  # Number of expected parts, if known
+    timestamp: datetime.datetime = field(default_factory=now_utc)
 
 
 @dataclass

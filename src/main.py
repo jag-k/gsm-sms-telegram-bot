@@ -597,7 +597,6 @@ class SMSBot:
                 sent_sms = SMSMessage(
                     index="outgoing",
                     sender="Me",
-                    clean_sender="Me",
                     text=message_text,
                     timestamp=datetime.datetime.now(datetime.UTC),
                     is_alphanumeric=False,

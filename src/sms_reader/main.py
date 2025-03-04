@@ -40,7 +40,6 @@ from sms_reader.utils import (
     now_utc,
     parse_sms_timestamp,
     parse_text_mode_response,
-    should_notify_multipart,
     sort_message_parts,
 )
 
@@ -320,7 +319,7 @@ class GSMModem:
 
         for sender, pending in self._pending_messages.items():
             # Ensure timestamp has timezone
-            timestamp = pending["timestamp"]
+            timestamp = pending.timestamp
             if timestamp.tzinfo is None:
                 timestamp = timestamp.replace(tzinfo=datetime.UTC)
 
@@ -332,21 +331,21 @@ class GSMModem:
 
                 # Bug fix: Check for complete multipart messages before discarding
                 is_complete = False
-                if pending.get("expected_parts") and len(pending["parts"]) >= pending["expected_parts"]:
+                if pending.expected_parts and len(pending.parts) >= pending.expected_parts:
                     logger.info(
-                        f"Found complete multipart message from {sender} with all {pending['expected_parts']} parts"
+                        f"Found complete multipart message from {sender} with all {pending.expected_parts} parts"
                     )
                     is_complete = True
 
                     # Sort and merge one final time before notification
                     sort_message_parts(pending)
-                    pending["message"] = create_merged_message(pending)
+                    pending.message = create_merged_message(pending)
 
                 # Notify if not already notified
-                if not pending.get("notified", False):
+                if not pending.notified:
                     logger.debug("Notifying about expired/complete pending message")
-                    await self._notify_single_message(pending["message"])
-                    pending["notified"] = True
+                    await self._notify_single_message(pending.message)
+                    pending.notified = True
 
                 # Always expire the message after timeout
                 expired_senders.append(sender)
@@ -363,6 +362,25 @@ class GSMModem:
         if expired_senders:
             logger.info(f"Cleaned up {len(expired_senders)} expired pending messages")
 
+    async def _process_message__notify(self, is_complete: bool, pending: PendingMessage, key: str) -> None:
+        """Notify about a message if needed.
+
+        :param is_complete: Whether the message is complete
+        :param pending: The pending message information
+        :param key: The key for the pending message
+        """
+        should_notify = is_complete and not pending.notified
+
+        # Send notification if needed
+        if should_notify:
+            await self._notify_single_message(pending.message)
+            pending.notified = True
+
+            # Remove from pending if complete
+            if is_complete:
+                logger.debug(f"UDH message {key} complete, cleaning up")
+                del self._pending_messages[key]
+
     async def _process_message(self, sms: SMSMessage) -> None:
         """Process a received SMS message and handle multipart messages.
 
@@ -375,54 +393,87 @@ class GSMModem:
             await self._notify_single_message(sms)
             return
 
+        # Check for UDH information first (most reliable)
+        udh_info = sms.udh_info
+        if udh_info:
+            # For UDH messages, use the reference number as the key
+            key = f"{sms.sender}_{udh_info['ref_num']}"
+
+            # Initialize a new pending message if needed
+            if key not in self._pending_messages:
+                self._pending_messages[key] = PendingMessage(
+                    message=sms,
+                    parts=[sms],
+                    notified=False,
+                    expected_parts=udh_info["total_parts"],
+                )
+                # Only notify about the first part if it is actually the first part
+                if udh_info["current_part"] == 1:
+                    await self._notify_single_message(sms)
+                    self._pending_messages[key].notified = True
+            else:
+                # Update existing pending message
+                pending = self._pending_messages[key]
+                pending.parts.append(sms)
+                pending.timestamp = now_utc()  # Update timestamp for timeout purposes
+
+                # Sort parts by UDH part number
+                sort_message_parts(pending)
+
+                # Merge the parts
+                pending.message = create_merged_message(pending)
+
+                # Check if a message is complete based on UDH
+                is_complete = len(pending.parts) >= udh_info["total_parts"]
+
+                # Determine if we should notify about this message
+                await self._process_message__notify(is_complete, pending, key)
+
+            # Clean up expired messages
+            await self._cleanup_pending_messages()
+            return
+
         # Handle a single message case
         if is_single_message(sms):
             await self._notify_single_message(sms)
             return
 
-        # Handle a multipart message
+        # Handle a multipart message based on text patterns
         sender = sms.sender
         part_info = extract_part_info(sms.text)
 
         # Initialize a new pending message if needed
         if sender not in self._pending_messages:
             # Create a new pending message
-            self._pending_messages[sender] = {
-                "message": sms,
-                "timestamp": now_utc(),
-                "parts": [sms],
-                "notified": False,
-                "expected_parts": part_info[1] if part_info else None,
-            }
-            # Always notify about the first part
-            await self._notify_single_message(sms)
-            self._pending_messages[sender]["notified"] = True
+            self._pending_messages[sender] = PendingMessage(
+                message=sms,
+                parts=[sms],
+                notified=False,
+                expected_parts=part_info[1] if part_info else None,
+            )
+            # Only notify about the first part if it's actually the first part
+            if not part_info or part_info[0] == 1:
+                await self._notify_single_message(sms)
+                self._pending_messages[sender].notified = True
         else:
             # Update existing pending message
             pending = self._pending_messages[sender]
-            pending["parts"].append(sms)
-            pending["timestamp"] = now_utc()
+            pending.parts.append(sms)
+            pending.timestamp = now_utc()  # Update timestamp for timeout purposes
 
             # Update expected parts if information is available
-            if part_info and not pending.get("expected_parts"):
-                pending["expected_parts"] = part_info[1]
+            if part_info and not pending.expected_parts:
+                pending.expected_parts = part_info[1]
 
             # Sort and merge parts
             sort_message_parts(pending)
-            pending["message"] = create_merged_message(pending)
+            pending.message = create_merged_message(pending)
 
-            # Check if a message is complete
+            # Check if a message is complete based on part indicators
             is_complete = is_message_complete(pending)
 
-            # Send notification if needed
-            if should_notify_multipart(pending, is_complete):
-                await self._notify_single_message(pending["message"])
-                pending["notified"] = True
-
-                # Remove from pending if complete
-                if is_complete:
-                    logger.debug(f"Message from {sender} complete, cleaning up")
-                    del self._pending_messages[sender]
+            # Determine if we should notify about this message
+            await self._process_message__notify(is_complete, pending, sender)
 
         # Clean up expired messages
         await self._cleanup_pending_messages()
@@ -499,16 +550,11 @@ class GSMModem:
                     decoded_text = decode_ucs2_text(text)
                     timestamp = parse_sms_timestamp(timestamp_str)
                     is_alphanumeric = sender and any(c.isalpha() for c in sender)
-                    clean_sender = sender or "Unknown"
-
-                    if is_alphanumeric and any(not c.isalnum() for c in clean_sender):
-                        clean_sender = "".join(c for c in clean_sender if c.isalnum())
 
                     # Create and process a message
                     sms_message = SMSMessage(
                         index=sms_index,
                         sender=sender or "Unknown",
-                        clean_sender=clean_sender,
                         text=decoded_text,
                         timestamp=timestamp,
                         is_alphanumeric=bool(is_alphanumeric),
