@@ -376,7 +376,7 @@ class GSMModem:
             if not sms.is_alphanumeric:  # Only track non-alphanumeric senders
                 self._pending_messages[sms.sender] = {
                     "message": sms,
-                    "timestamp": datetime.datetime.now(),
+                    "timestamp": datetime.datetime.now(datetime.UTC),
                     "parts": [sms],
                 }
 
@@ -408,7 +408,7 @@ class GSMModem:
         pending = self._pending_messages[sms.sender]
 
         # Check if the message is within the merge timeout
-        now = datetime.datetime.now()
+        now = datetime.datetime.now(datetime.UTC)
         time_diff = (now - pending["timestamp"]).total_seconds()
 
         if time_diff > self._merge_timeout:
