@@ -1,13 +1,11 @@
 import datetime
 import logging
-import re
 import string
 
 import messaging.sms
 
 from sms_reader.consts import (
     ASCII_SMS_LENGTH,
-    OTP_KEYWORDS,
     UNICODE_CHAR_THRESHOLD,
     UNICODE_SMS_LENGTH,
 )
@@ -15,6 +13,10 @@ from sms_reader.models import PendingMessage, SMSMessage
 
 
 logger = logging.getLogger(__name__)
+
+
+def now_utc() -> datetime.datetime:
+    return datetime.datetime.now(datetime.UTC)
 
 
 def parse_text_mode_response(response_text: str) -> list[dict]:
@@ -246,28 +248,6 @@ def is_single_message(sms: SMSMessage) -> bool:
     is_unicode = any(ord(c) > UNICODE_CHAR_THRESHOLD for c in sms.text)
     sms_limit = UNICODE_SMS_LENGTH if is_unicode else ASCII_SMS_LENGTH
     return len(sms.text) < sms_limit
-
-
-def is_otp_message(sms: SMSMessage) -> bool:
-    """Check if the message appears to be an OTP (One-Time Password).
-
-    :param sms: The SMS message to check
-    :return: True if this appears to be an OTP message
-    """
-    text_lower = sms.text.lower()
-
-    # Check for OTP keywords
-    for keyword in OTP_KEYWORDS:
-        if keyword in text_lower:
-            return True
-
-    # Look for patterns like "code: 123456" or standalone 4-6 digit numbers
-    # This regex looks for 4-6 digit numbers either standalone or after a colon/equals
-    digit_match = re.search(r"(?:[:=]\s*)?(\d{4,6})\b", text_lower)
-    if digit_match:
-        return True
-
-    return False
 
 
 def is_message_complete(pending: PendingMessage) -> bool:

@@ -36,8 +36,8 @@ from sms_reader.utils import (
     decode_ucs2_text,
     extract_part_info,
     is_message_complete,
-    is_otp_message,
     is_single_message,
+    now_utc,
     parse_sms_timestamp,
     parse_text_mode_response,
     should_notify_multipart,
@@ -80,7 +80,7 @@ class GSMModem:
 
         self._pending_messages: dict[str, PendingMessage] = {}
         self._merge_timeout = merge_messages_timeout
-        self._last_cleanup = datetime.datetime.now(datetime.UTC)
+        self._last_cleanup = now_utc()
         self._merge_enabled = merge_messages_timeout > 0
         self._response_wait_time = response_wait_time
         self._check_interval = check_interval
@@ -117,11 +117,11 @@ class GSMModem:
         :param deadline: The point in time to stop waiting
         :return: The response string and elapsed time
         """
-        start_time = datetime.datetime.now()
+        start_time = now_utc()
         response = ""
 
         try:
-            while datetime.datetime.now() < deadline:
+            while now_utc() < deadline:
                 # Use a fixed timeout for each read attempt
                 chunk = await asyncio.wait_for(self._reader.read(BUFFER_SIZE), 0.5)
                 if chunk:
@@ -139,7 +139,7 @@ class GSMModem:
             pass
 
         # Calculate total elapsed time
-        elapsed = (datetime.datetime.now() - start_time).total_seconds()
+        elapsed = (now_utc() - start_time).total_seconds()
 
         return response, elapsed
 
@@ -174,7 +174,7 @@ class GSMModem:
 
             # Get actual wait time (use instance default if not provided)
             wait_time = response_wait_time if response_wait_time is not None else self._response_wait_time
-            deadline = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=wait_time)
+            deadline = now_utc() + datetime.timedelta(seconds=wait_time)
 
             # Read response with proper timeout handling
             response, elapsed = await self._read_response_with_deadline(deadline)
@@ -235,17 +235,6 @@ class GSMModem:
             logger.error("Failed to connect to modem")
             return False
 
-        # Set echo off for cleaner responses
-        await self._send_at_command("ATE0")
-
-        # Reset modem to ensure a clean state - use reduced timeout when possible
-        logger.info("Resetting modem to ensure clean state")
-        # Use a shorter timeout for reset command but still sufficient
-        reset_response = await self._send_at_command("ATZ", delay=1.0, response_wait_time=5.0)
-        if not reset_response.success:
-            logger.warning("Modem reset failed, continuing anyway")
-
-        # Use concurrent initialization when possible
         # Create tasks for independent operations that can run in parallel
         logger.info("Initializing modem - checking status and sending basic commands")
 
@@ -277,8 +266,7 @@ class GSMModem:
                 return False
 
         # Delete any existing messages and load contacts in parallel
-        logger.info("Preparing modem - clearing messages and loading contacts")
-        await self.delete_all_sms()
+        logger.info("Loading contacts")
         await self.get_sim_contacts()
 
         # Configure SMS mode with a fast fallback
@@ -309,10 +297,6 @@ class GSMModem:
         if not self.on_sms_received:
             return False
 
-        # Check if this is an OTP message - log it specially
-        if is_otp_message(sms):
-            logger.info(f"OTP message received from {sms.sender}")
-
         # Handle both sync and async callbacks
         callback_result = self.on_sms_received(sms)
         if asyncio.iscoroutine(callback_result):
@@ -325,7 +309,7 @@ class GSMModem:
         if not self._merge_enabled:
             return
 
-        now = datetime.datetime.now(datetime.UTC)
+        now = now_utc()
         # Only clean up at the interval defined by merge_timeout
         if (now - self._last_cleanup).total_seconds() < self._merge_timeout:
             return
@@ -386,13 +370,6 @@ class GSMModem:
         """
         logger.debug(f"Processing SMS from {sms.sender}")
 
-        # Check if this is an OTP message - prioritize it
-        is_otp = is_otp_message(sms)
-        if is_otp and self._prioritize_otp:
-            logger.info(f"Prioritizing OTP message from {sms.sender}")
-            await self._notify_single_message(sms)
-            return
-
         # Skip merging if disabled
         if not self._merge_enabled:
             await self._notify_single_message(sms)
@@ -412,7 +389,7 @@ class GSMModem:
             # Create a new pending message
             self._pending_messages[sender] = {
                 "message": sms,
-                "timestamp": datetime.datetime.now(datetime.UTC),
+                "timestamp": now_utc(),
                 "parts": [sms],
                 "notified": False,
                 "expected_parts": part_info[1] if part_info else None,
@@ -424,7 +401,7 @@ class GSMModem:
             # Update existing pending message
             pending = self._pending_messages[sender]
             pending["parts"].append(sms)
-            pending["timestamp"] = datetime.datetime.now(datetime.UTC)
+            pending["timestamp"] = now_utc()
 
             # Update expected parts if information is available
             if part_info and not pending.get("expected_parts"):
@@ -599,14 +576,14 @@ class GSMModem:
         current_interval = base_interval
 
         # Track message activity to adjust polling frequency
-        last_message_time = datetime.datetime.now()
+        last_message_time = now_utc()
         message_activity = False
 
         logger.info(f"Starting SMS monitoring with base interval of {base_interval:.1f}s")
         logger.info(f"Using active interval: {active_interval:.1f}s, max interval: {max_inactive_interval:.1f}s")
 
         while True:
-            check_start = datetime.datetime.now()
+            check_start = now_utc()
 
             # Check for new messages
             messages = await self._sms_reader()
@@ -616,19 +593,15 @@ class GSMModem:
                 # We received messages, so use the shorter active interval
                 # for better responsiveness
                 message_activity = True
-                last_message_time = datetime.datetime.now()
+                last_message_time = now_utc()
                 current_interval = active_interval
 
                 # Log activity
                 logger.info(f"Processed {len(messages)} new messages")
 
-                # Count OTP messages for better monitoring
-                otp_count = sum(1 for msg in messages if is_otp_message(msg))
-                if otp_count > 0:
-                    logger.info(f"Including {otp_count} OTP messages")
             else:
                 # No messages received, check if we should increase an interval
-                inactive_time = (datetime.datetime.now() - last_message_time).total_seconds()
+                inactive_time = (now_utc() - last_message_time).total_seconds()
 
                 # If we've been in active mode but no messages for a while,
                 # gradually return to normal polling
@@ -643,7 +616,7 @@ class GSMModem:
                     logger.debug(f"Adjusting polling interval to {current_interval:.1f}s")
 
             # Calculate actual sleep time (accounting for processing time)
-            elapsed = (datetime.datetime.now() - check_start).total_seconds()
+            elapsed = (now_utc() - check_start).total_seconds()
 
             # Ensure we don't sleep for a negative amount of time
             sleep_time = max(MIN_SLEEP_INTERVAL, current_interval - elapsed)
@@ -665,20 +638,20 @@ class GSMModem:
         :param wait_time: Maximum time to wait for prompt
         :return: Tuple of (prompt_received, response_text)
         """
-        start_time = datetime.datetime.now()
+        start_time = now_utc()
         response = ""
 
         # Simple approach - just read until we find '>' or timeout
         deadline = start_time + datetime.timedelta(seconds=wait_time)
 
         try:
-            while datetime.datetime.now() < deadline:
+            while now_utc() < deadline:
                 # Simple fixed timeout read
                 chunk = await asyncio.wait_for(self._reader.read(BUFFER_SIZE), 0.5)
                 if chunk:
                     response += chunk.decode(errors="ignore")
                     if ">" in response:
-                        elapsed = (datetime.datetime.now() - start_time).total_seconds()
+                        elapsed = (now_utc() - start_time).total_seconds()
                         logger.debug(f"SMS prompt received in {elapsed:.2f}s")
                         return True, response
 
@@ -697,12 +670,12 @@ class GSMModem:
         :param wait_time: Maximum time to wait for response.
         :return: Response text.
         """
-        start_time = datetime.datetime.now()
+        start_time = now_utc()
         response = ""
         deadline = start_time + datetime.timedelta(seconds=wait_time)
 
         try:
-            while datetime.datetime.now() < deadline:
+            while now_utc() < deadline:
                 # Use a fixed timeout for each read attempt
                 chunk = await asyncio.wait_for(self._reader.read(BUFFER_SIZE), 0.5)
                 if chunk:
@@ -710,7 +683,7 @@ class GSMModem:
 
                     # Check for success indicators
                     if "OK" in response or "+CMGS:" in response:
-                        elapsed = (datetime.datetime.now() - start_time).total_seconds()
+                        elapsed = (now_utc() - start_time).total_seconds()
                         logger.debug(f"Response completed in {elapsed:.2f}s")
                         break
 
