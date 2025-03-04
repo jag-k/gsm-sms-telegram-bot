@@ -15,8 +15,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-editable --compile-bytecode --no-dev
 
 
-#FROM python:${PYTHON_VERSION}-alpine
-FROM alpine:latest
+FROM python:${PYTHON_VERSION}-alpine
 
 WORKDIR /app
 
