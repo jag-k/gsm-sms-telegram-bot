@@ -77,6 +77,15 @@ class ModemStatus:
 
 
 @dataclass
+class UDHInfo:
+    """UDH information for multipart messages."""
+
+    ref_num: int
+    total_parts: int
+    current_part: int
+
+
+@dataclass
 class SMSMessage:
     """Structure representing an SMS message."""
 
@@ -86,7 +95,7 @@ class SMSMessage:
     timestamp: datetime.datetime
     is_alphanumeric: bool
     sender_type: int | None = None  # Type of address (0x91=international, 0x81=national, 0x50/0xD0=alphanumeric)
-    udh_info: dict | None = None  # UDH information for multipart messages
+    udh_info: UDHInfo | None = None  # UDH information for multipart messages
 
     @classmethod
     def from_dict(cls, data: dict) -> "SMSMessage":
@@ -123,6 +132,11 @@ class SMSMessage:
             f"<blockquote>{html.escape(self.text)}</blockquote>"
         )
 
+    @property
+    def is_single(self) -> bool:
+        """Check if this is a single message (not multipart)."""
+        return self.udh_info is None
+
 
 @dataclass
 class PendingMessage:
@@ -131,6 +145,44 @@ class PendingMessage:
     notified: bool = False  # Track if we've notified about this message
     expected_parts: int | None = None  # Number of expected parts, if known
     timestamp: datetime.datetime = field(default_factory=now_utc)
+
+    @property
+    def is_complete(self) -> bool:
+        """Check if the message appears to be complete."""
+        return self.expected_parts is not None and len(self.parts) >= self.expected_parts
+
+    def merge_message(self, update_self_message: bool = True) -> SMSMessage:
+        """Create a merged message from all parts using proper ordering.
+
+        :param update_self_message: If True, update the message in this instance
+        :return: The merged SMS message
+        """
+        # Ensure parts are properly sorted before merging
+        try:
+            # Sort by UDH part number
+            self.parts.sort(key=lambda part: part.udh_info.current_part if part.udh_info else 999)
+        except Exception as e:
+            logger.warning(f"Failed to sort message parts: {e}", exc_info=e)
+
+        # Join all text parts
+        parts_text = [part.text for part in self.parts]
+        merged_text = "".join(parts_text)
+
+        # Create a new message with merged content
+        sms = SMSMessage(
+            index=f"{self.message.index}_merged_{len(self.parts)}",
+            sender=self.message.sender,
+            text=merged_text,
+            timestamp=self.message.timestamp,
+            is_alphanumeric=self.message.is_alphanumeric,
+            sender_type=self.message.sender_type,
+            udh_info=None,  # Clear UDH info as this is a merged message
+        )
+
+        if update_self_message:
+            self.message = sms
+
+        return sms
 
 
 @dataclass

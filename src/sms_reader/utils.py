@@ -1,29 +1,30 @@
 import datetime
 import logging
-import re
 import string
+
+from typing import TypedDict
 
 import messaging.sms
 
-from sms_reader.consts import (
-    ASCII_SMS_LENGTH,
-    UNICODE_CHAR_THRESHOLD,
-    UNICODE_SMS_LENGTH,
-)
-from sms_reader.models import PendingMessage, SMSMessage
+from sms_reader.models import SMSMessage, UDHInfo
 
 
 logger = logging.getLogger(__name__)
 
 
-def parse_text_mode_response(response_text: str) -> list[dict]:
+class ParseTextModeResponse(TypedDict):
+    header: str
+    text: str
+
+
+def parse_text_mode_response(response_text: str) -> list[ParseTextModeResponse]:
     """Parse the AT+CMGL response into a list of SMS entries.
 
     :param response_text: Raw response from AT+CMGL command
     :return: List of dictionaries with header and text fields
     """
-    sms_entries = []
-    current_entry = None
+    sms_entries: list[ParseTextModeResponse] = []
+    current_entry: ParseTextModeResponse | None = None
 
     for line in map(str.strip, response_text.split("\n")):
         # If the line starts with +CMGL, it is an SMS header
@@ -145,14 +146,13 @@ def decode_pdu(sms_index: str, pdu_data: str) -> SMSMessage | None:
 
             # Check for concatenation information
             if hasattr(sms.udh, "concat") and sms.udh.concat:
-                udh_info = {
-                    "ref_num": sms.udh.concat.ref,  # Reference number
-                    "total_parts": sms.udh.concat.cnt,  # Total number of parts
-                    "current_part": sms.udh.concat.seq,  # Current part number (sequence)
-                }
+                udh_info = UDHInfo(
+                    ref_num=sms.udh.concat.ref,  # Reference number
+                    total_parts=sms.udh.concat.cnt,  # Total number of parts
+                    current_part=sms.udh.concat.seq,  # Current part number (sequence)
+                )
                 logger.debug(
-                    f"Found multipart SMS: part {udh_info['current_part']}/{udh_info['total_parts']}, "
-                    f"ref: {udh_info['ref_num']}"
+                    f"Found multipart SMS: part {udh_info.current_part}/{udh_info.total_parts}, ref: {udh_info.ref_num}"
                 )
 
         # Extract additional information from the PDU data directly
@@ -192,224 +192,3 @@ def decode_pdu(sms_index: str, pdu_data: str) -> SMSMessage | None:
     except Exception as e:
         logger.error(f"Failed to decode PDU data: {e}", exc_info=e)
         return None
-
-
-def extract_part_info(text: str) -> tuple[int, int] | None:
-    """Extract part number and total parts from the message text.
-    Returns (current_part, total_parts) or None if not found."""
-    try:
-        # Look for patterns like (1/3) at the beginning of the message
-        match = re.match(r"^\s*\((\d+)/(\d+)\)", text)
-        if match:
-            current, total = map(int, match.groups())
-            return current, total
-
-        # Also try a more flexible pattern that might appear anywhere in the text
-        match = re.search(r"\((\d+)/(\d+)\)", text)
-        if match:
-            current, total = map(int, match.groups())
-            return current, total
-    except (ValueError, IndexError, AttributeError):
-        pass
-    return None
-
-
-def sort_message_parts(pending: PendingMessage) -> None:
-    """Sort message parts by their order numbers using metadata."""
-    try:
-        # First, check if we have UDH information (most reliable)
-        parts_with_udh: list[tuple[int, SMSMessage]] = [
-            (part_num, part) for part in pending.parts if (part_num := (part.udh_info or {}).get("current_part", 0))
-        ]
-
-        # If all parts have UDH info, sort by UDH part number
-        if all(part_num is not None for part_num, _ in parts_with_udh):
-            parts_with_udh.sort(key=lambda x: x[0])
-            pending.parts = [part for _, part in parts_with_udh]
-            return
-
-        # Next, try to sort by explicit part numbers in text
-        parts_with_numbers: list[tuple[int, SMSMessage]] = []
-        for part in pending.parts:
-            part_info = extract_part_info(part.text)
-            if part_info:
-                current, _ = part_info
-                parts_with_numbers.append((current, part))
-
-        if parts_with_numbers and len(parts_with_numbers) == len(pending.parts):
-            # Sort by part number
-            parts_with_numbers.sort(key=lambda x: x[0])
-            pending.parts = [part for _, part in parts_with_numbers]
-            return
-
-        # Fallback to the original method if no explicit part numbers
-        # This is the least reliable method and should only be used as a last resort
-        logger.warning("Using text-based part sorting as fallback - less reliable")
-        try:
-            pending.parts.sort(key=lambda m: int(m.text.split(")")[0].split("/")[0].strip("(")))
-        except (ValueError, IndexError):
-            logger.warning("Failed to sort by text pattern, using timestamp order")
-            # As a last resort, sort by timestamp
-            pending.parts.sort(key=lambda m: m.timestamp)
-
-    except Exception as e:
-        logger.warning(f"Failed to sort message parts: {e}", exc_info=e)
-
-
-def create_merged_message(pending: PendingMessage) -> SMSMessage:
-    """Create a merged message from all parts using proper ordering."""
-    # For standard messages with part indicators like (1/3), (2/3), (3/3)
-    # We want to extract just the content without the indicators
-    parts_with_content: list[str] = []
-
-    # Ensure parts are properly sorted before merging
-    sort_message_parts(pending)
-
-    # Check if we have UDH information
-    has_udh = any(part.udh_info for part in pending.parts)
-
-    for part in pending.parts:
-        text = part.text
-
-        if has_udh:
-            # For UDH messages, use the text as is
-            parts_with_content.append(text)
-            continue
-
-        # Try to remove part indicators like (1/3) from the beginning
-        part_info = extract_part_info(text)
-        if part_info:
-            # Find the closing parenthesis of the part indicator and extract content after it
-            try:
-                match = re.match(r"^\s*\(\d+/\d+\)(.*)", text)
-                if match:
-                    content = match.group(1).strip()
-                    parts_with_content.append(content)
-                    continue
-            except (ValueError, IndexError, AttributeError):
-                pass
-
-        # No part indicator or failed to remove it, use the full text
-        parts_with_content.append(text)
-
-    # Join the parts with intelligent handling for carrier-split messages
-    merged_text = ""
-    for i, part in enumerate(parts_with_content):
-        # For the first part, add it as is
-        if i == 0:
-            merged_text += part
-        # For later parts, check if we need to add a space
-        # If the previous part ends with a complete word and this part starts with a new word,
-        # we need to add a space to maintain proper spacing
-        elif merged_text and merged_text[-1].isalnum() and part and part[0].isalnum():
-            merged_text += " " + part
-        else:
-            # Otherwise concatenate (for mid-word splits)
-            merged_text += part
-
-    original_message = pending.message
-
-    # Create a new message with merged content
-    return SMSMessage(
-        index=f"{original_message.index}_merged_{len(pending.parts)}",
-        sender=original_message.sender,
-        text=merged_text,
-        timestamp=original_message.timestamp,
-        is_alphanumeric=original_message.is_alphanumeric,
-        sender_type=original_message.sender_type,
-        udh_info=None,  # Clear UDH info as this is a merged message
-    )
-
-
-def is_message_complete(pending: PendingMessage) -> bool:
-    """Check if a multipart message is complete using metadata.
-
-    :param pending: The pending message information.
-    :return: True if the message appears to be complete.
-    """
-    # First, check UDH information (most reliable)
-    udh_parts = {}
-    total_parts_udh = 0
-
-    for part in pending.parts:
-        if part.udh_info:
-            ref_num = part.udh_info["ref_num"]
-            current = part.udh_info["current_part"]
-            total = part.udh_info["total_parts"]
-
-            if ref_num not in udh_parts:
-                udh_parts[ref_num] = {"parts": set(), "total": total}
-
-            udh_parts[ref_num]["parts"].add(current)
-            total_parts_udh = max(total_parts_udh, total)
-
-    # Check if any reference number has all its parts
-    for ref_data in udh_parts.values():
-        if len(ref_data["parts"]) == ref_data["total"]:
-            logger.info(f"Message complete based on UDH: {len(ref_data['parts'])}/{ref_data['total']} parts")
-            return True
-
-    # Check if we have all expected parts (from any source)
-    if pending.expected_parts and len(pending.parts) >= pending.expected_parts:
-        logger.info(f"Message complete: {len(pending.parts)}/{pending.expected_parts} parts")
-        return True
-
-    # Check text-based part indicators
-    parts_with_info = []
-    max_parts = 0
-
-    for part in pending.parts:
-        part_info = extract_part_info(part.text)
-        if part_info:
-            current, total = part_info
-            max_parts = max(max_parts, total)
-            parts_with_info.append(current)
-
-    # If we have part information and all parts are present
-    if 0 < max_parts == len(parts_with_info) and set(parts_with_info) == set(range(1, max_parts + 1)):
-        logger.info(f"Message complete based on text indicators: all {max_parts} parts received")
-        return True
-
-    return False
-
-
-def should_notify_multipart(pending: PendingMessage, is_complete: bool) -> bool:
-    """Check if we should send a notification for a multipart message.
-
-    :param pending: The pending message information
-    :param is_complete: Whether the message is complete
-    :return: True if notification should be sent
-    """
-    # Always notify when a message is complete
-    if is_complete:
-        return True
-
-    # For partial messages, only notify if not already notified
-    return not pending.notified
-
-
-def is_single_message(sms: SMSMessage) -> bool:
-    """Check if SMS is a single complete message (not multipart).
-
-    :param sms: The SMS message to check
-    :return: True if this is a single complete message
-    """
-    # Check for UDH information
-    if sms.udh_info:
-        return False
-
-    # Check for explicit part markers
-    part_info = extract_part_info(sms.text)
-    if part_info:
-        return False
-
-    # Check message length against limits - if it is very close to the limit,
-    # it is likely a multipart message even without explicit markers
-    is_unicode = any(ord(c) > UNICODE_CHAR_THRESHOLD for c in sms.text)
-    sms_limit = UNICODE_SMS_LENGTH if is_unicode else ASCII_SMS_LENGTH
-
-    # If the message length is ≥ 90% of the limit, treat it as potentially multipart
-    if len(sms.text) >= int(sms_limit * 0.9):
-        return False
-
-    return True
