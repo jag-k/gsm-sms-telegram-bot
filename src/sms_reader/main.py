@@ -73,14 +73,24 @@ class GSMModem:
             return False
         return True
 
+    async def _notify_single_message(self, sms: SMSMessage) -> bool:
+        """Notify about a single message.
+
+        :param sms: The SMS message to notify about
+        :return: True if the notification was successful, False otherwise
+        """
+        if self.on_sms_received:
+            callback_result = self.on_sms_received(sms)
+            if asyncio.iscoroutine(callback_result):
+                await callback_result
+            return True
+        return False
+
     async def _notify_if_needed(self, pending: PendingMessage, is_last_part: bool) -> None:
         """Notify callback if needed and handle cleanup."""
         if not pending.get("notified", False) or is_last_part:
-            if self.on_sms_received:
-                logger.debug("Notifying callback about merged message")
-                callback_result = self.on_sms_received(pending["message"])
-                if asyncio.iscoroutine(callback_result):
-                    await callback_result
+            ok = await self._notify_single_message(pending["message"])
+            if ok:
                 pending["notified"] = True
 
                 if is_last_part:
@@ -130,7 +140,7 @@ class GSMModem:
         logger.debug("Cleaning up pending messages")
 
         # Find expired messages
-        expired_senders = []
+        expired_senders: list[str] = []
         for sender, pending in self._pending_messages.items():
             timestamp = pending["timestamp"]
             if timestamp.tzinfo is None:
@@ -139,14 +149,14 @@ class GSMModem:
 
             if time_diff > self._merge_timeout:
                 logger.debug(f"Message from {sender} expired after {time_diff}s")
-                expired_senders.append(sender)
 
                 # If we haven't notified about this message yet, do it now
-                if not pending.get("notified", False) and self.on_sms_received:
+                if not pending.get("notified", False):
                     logger.debug("Notifying about expired pending message")
-                    callback_result = self.on_sms_received(pending["message"])
-                    if asyncio.iscoroutine(callback_result):
-                        await callback_result
+                    ok = await self._notify_single_message(pending["message"])
+                    if ok:
+                        pending["notified"] = True
+                        expired_senders.append(sender)
 
         # Remove expired messages
         for sender in expired_senders:
@@ -155,20 +165,13 @@ class GSMModem:
         if expired_senders:
             logger.info(f"Cleaned up {len(expired_senders)} expired pending messages")
 
-    async def _notify_single_message(self, sms: SMSMessage) -> None:
-        """Notify about a single message."""
-        if self.on_sms_received:
-            callback_result = self.on_sms_received(sms)
-            if asyncio.iscoroutine(callback_result):
-                await callback_result
-
     async def _check_and_merge(self, sender: str) -> None:
         """Check if we have all parts and can merge the message."""
         pending = self._pending_messages[sender]
 
         # Sort parts by text content
-        parts = pending["parts"]
-        parts.sort(key=lambda m: len(m.text))  # Sort by length as a fallback
+        parts: list[SMSMessage] = pending["parts"]
+        parts.sort(key=lambda m: m.timestamp)
 
         # Merge texts
         merged_text = "".join(part.text for part in parts)
@@ -190,10 +193,8 @@ class GSMModem:
         # and let the timeout mechanism handle cleanup
         if not pending["expected_parts"] and not pending["notified"]:
             logger.debug(f"Notifying about merged message from {sender} with {len(parts)} parts")
-            if self.on_sms_received:
-                callback_result = self.on_sms_received(merged_sms)
-                if asyncio.iscoroutine(callback_result):
-                    await callback_result
+            ok = await self._notify_single_message(merged_sms)
+            if ok:
                 pending["notified"] = True
 
     async def _handle_message_part(self, sms: SMSMessage, part_info: tuple[int, int] | None) -> None:
@@ -273,7 +274,7 @@ class GSMModem:
         :return: Structured response containing success status and data
         """
         if self._writer is None:
-            return ATResponse(raw_response="", error_message="Modem not connected")
+            raise RuntimeError("Modem not connected")
 
         try:
             self._writer.write((command + "\r\n").encode())
