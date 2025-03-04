@@ -7,9 +7,9 @@ from collections.abc import Awaitable, Callable
 
 import phonenumbers
 
-from async_sms_reader import GSMModem, SMSMessage
 from config import Settings
 from phonenumbers import NumberParseException
+from sms_reader import GSMModem, SMSMessage
 from telegram import BotCommand, Update
 from telegram.constants import ParseMode
 from telegram.error import NetworkError, RetryAfter, TimedOut
