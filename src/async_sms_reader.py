@@ -106,7 +106,7 @@ class SMSMessage:
     @classmethod
     def from_dict(cls, data: dict) -> "SMSMessage":
         timestamp: str | datetime.datetime | None = data.pop("timestamp", None)
-        if timestamp:
+        if timestamp is not None:
             if isinstance(timestamp, str):
                 timestamp = datetime.datetime.fromisoformat(timestamp)
             if timestamp.tzinfo is None:
