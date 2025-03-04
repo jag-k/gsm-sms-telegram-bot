@@ -331,7 +331,7 @@ class GSMModem:
             return
 
         # Try to merge with pending messages
-        merged = self._try_merge_message(sms)
+        merged = await self._try_merge_message(sms)
 
         # If not merged, this is a new message sequence
         if not merged:
