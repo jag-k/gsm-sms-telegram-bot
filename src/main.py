@@ -1,9 +1,9 @@
 import asyncio
+import datetime
 import logging
 import re
 
 from collections.abc import Awaitable, Callable
-from datetime import datetime
 
 import phonenumbers
 
@@ -211,6 +211,20 @@ class SMSBot:
         except Exception as e:
             logger.error(f"Failed to forward SMS to Telegram: {e}", exc_info=e)
 
+    async def get_sms_messages(self) -> list[SMSMessage]:
+        """
+        Retrieve stored SMS messages from the bot's persistence storage.
+
+        :return: List of stored SMS messages
+        """
+        if not self.application:
+            logger.error("Cannot retrieve SMS: application not initialized")
+            return []
+        bot_data = self.application.bot_data
+        bot_data.setdefault("sms_messages", [])
+        async with self.bot_data_lock:
+            return [SMSMessage.from_dict(msg) for msg in bot_data["sms_messages"]]
+
     async def store_sms_message(self, sms: SMSMessage) -> None:
         """
         Store an SMS message in the bot's persistence storage.
@@ -231,6 +245,17 @@ class SMSBot:
             # Log the storage
             logger.info(f"Stored SMS from {sms.sender} in persistence storage")
 
+    async def clear_storage(self) -> None:
+        """Clear the bot's persistence storage."""
+        if not self.application:
+            logger.error("Cannot clear storage: application not initialized")
+            return
+        bot_data = self.application.bot_data
+
+        async with self.bot_data_lock:
+            bot_data.clear()
+            logger.info("Cleared bot persistence storage")
+
     async def set_bot_commands(self, chat_id: int, include_cancel: bool = False) -> None:
         """
         Set bot commands for the specific chat.
@@ -245,6 +270,7 @@ class SMSBot:
         commands = [
             BotCommand("start", "Show recent SMS messages"),
             BotCommand("send", "Send an SMS message"),
+            BotCommand("clear", "Clear message history"),
         ]
 
         # Add the cancel command only when needed
@@ -293,7 +319,7 @@ class SMSBot:
         await self.set_bot_commands(update.effective_chat.id, include_cancel=False)
 
         # Get messages from storage
-        messages: list[SMSMessage] = [SMSMessage.from_dict(msg) for msg in context.bot_data.get("sms_messages", [])]
+        messages: list[SMSMessage] = await self.get_sms_messages()
         total_messages = len(messages)
 
         if not messages:
@@ -313,6 +339,21 @@ class SMSBot:
         )
 
         await update.message.reply_text(response, parse_mode=ParseMode.HTML)
+
+    async def cmd_clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """
+        Handle the /clear command: clear message history.
+
+        :param update: The update containing the command.
+        :param context: The context for this handler.
+        """
+        if not await self._check_access(update):
+            return
+        if not update.message or not update.effective_chat:
+            return
+
+        await self.clear_storage()
+        await update.message.reply_text("🧹 Message history cleared!")
 
     async def cmd_send(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """
@@ -599,8 +640,9 @@ class SMSBot:
                     sender="Me",
                     clean_sender="Me",
                     text=message_text,
-                    timestamp=datetime.now(),
+                    timestamp=datetime.datetime.now(datetime.UTC),
                     is_alphanumeric=False,
+                    sender_type=None,
                 )
                 await self.store_sms_message(sent_sms)
             else:
@@ -687,6 +729,7 @@ class SMSBot:
         app = self.application
         # Command handlers
         app.add_handler(CommandHandler("start", self.cmd_start))
+        app.add_handler(CommandHandler("clear", self.cmd_clear))
 
         # Create a conversation handler for /send command
         send_conv_handler = ConversationHandler(
