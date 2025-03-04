@@ -26,10 +26,6 @@ from telegram.ext import (
 
 settings = Settings()
 
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s [%(name)s]: %(message)s",
-    level=logging.WARNING,
-)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 logging.getLogger("async_sms_reader").setLevel(logging.DEBUG)
@@ -117,7 +113,7 @@ def format_phone_number(phone_number: str) -> str:
         # If not valid, fall back to basic formatting
         raise ValueError("Invalid phone number")
     except (ValueError, NumberParseException):
-        # Fallback to basic formatting if parsing fails
+        # Fallback to basic formatting if parsing fails.
         # Remove common formatting characters
         cleaned = re.sub(r"[\s\-().]", "", phone_number)
 
@@ -153,6 +149,7 @@ def extract_sender_from_message(message_text: str) -> str | None:
     return None
 
 
+# noinspection PyAttributeOutsideInit
 class SMSBot:
     def __init__(self) -> None:
         self.modem: GSMModem
@@ -308,13 +305,8 @@ class SMSBot:
                 await msg.reply_text("GSM modem is not initialized.")
         return True
 
-    async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """
-        Handle the /start command - show recent messages.
-
-        :param update: The update containing the command.
-        :param context: The context for this handler.
-        """
+    async def cmd_start(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle the /start command - show recent messages."""
         # Check if this is the allowed user
         if not await self._check_access(update):
             return
@@ -346,7 +338,7 @@ class SMSBot:
 
         await update.message.reply_text(response, parse_mode=ParseMode.HTML)
 
-    async def cmd_clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def cmd_clear(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle the /clear command."""
         logger.info("Processing /clear command")
 
@@ -540,7 +532,7 @@ class SMSBot:
         # Send the SMS
         return await self.send_sms(update, phone_number, message_text)
 
-    async def handle_sms_reply(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def handle_sms_reply(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle replies to SMS messages."""
         logger.info("Processing SMS reply")
 

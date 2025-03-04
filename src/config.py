@@ -1,7 +1,15 @@
+import logging
+
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s [%(name)s]: %(message)s",
+    level=logging.WARNING,
+)
 
 
 SRC_DIR = Path(__file__).resolve().parent
