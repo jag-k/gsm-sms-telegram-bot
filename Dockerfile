@@ -5,6 +5,10 @@ FROM python:${PYTHON_VERSION}-alpine AS build
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install uv
 
+# Install build dependencies for opentelemetry like opentelemetry-instrumentation-system-metric
+RUN --mount=type=cache,target=/root/.cache/apk \
+    apk add gcc python3-dev musl-dev linux-headers
+
 # Change the working directory to the `app` directory
 WORKDIR /app
 
