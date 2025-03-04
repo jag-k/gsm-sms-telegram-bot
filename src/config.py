@@ -63,6 +63,7 @@ class ModemSettings(BaseModel):
     baud_rate: int = Field(115200, description="Baud rate for the GSM modem")
     default_region: str = Field("US", description="Default region code for phone numbers without country code")
     merge_messages_timeout: int = Field(10, description="Timeout in seconds for merging messages")
+    check_rate: int = Field(3, description="Rate in seconds to check for new messages")
 
 
 class Settings(BaseSettings):

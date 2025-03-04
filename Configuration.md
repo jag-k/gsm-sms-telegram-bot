@@ -33,3 +33,4 @@ Settings for the GSM Modem.
 | `MODEM__BAUD_RATE`              | `integer` | `115200`         | Baud rate for the GSM modem                                | `115200`         |
 | `MODEM__DEFAULT_REGION`         | `string`  | `"US"`           | Default region code for phone numbers without country code | `"US"`           |
 | `MODEM__MERGE_MESSAGES_TIMEOUT` | `integer` | `10`             | Timeout in seconds for merging messages                    | `10`             |
+| `MODEM__CHECK_RATE`             | `integer` | `3`              | Rate in seconds to check for new messages                  | `3`              |

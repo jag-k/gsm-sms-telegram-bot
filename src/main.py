@@ -171,7 +171,7 @@ class SMSBot:
                 logger.error(f"Error in SMS monitoring: {e}", exc_info=e)
 
             logger.debug("Waiting before next monitoring check")
-            await asyncio.sleep(10)
+            await asyncio.sleep(settings.modem.check_rate)
 
     async def on_sms_received(self, sms: SMSMessage) -> None:
         """
