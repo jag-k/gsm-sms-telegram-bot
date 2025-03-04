@@ -16,10 +16,6 @@ from sms_reader.models import PendingMessage, SMSMessage
 logger = logging.getLogger(__name__)
 
 
-def now_utc() -> datetime.datetime:
-    return datetime.datetime.now(datetime.UTC)
-
-
 def parse_text_mode_response(response_text: str) -> list[dict]:
     """Parse the AT+CMGL response into a list of SMS entries.
 

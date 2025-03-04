@@ -29,7 +29,7 @@ from sms_reader.consts import (
     UNICODE_CHAR_THRESHOLD,
     UNICODE_SMS_LENGTH,
 )
-from sms_reader.models import ATResponse, ModemStatus, PendingMessage, SMSMessage
+from sms_reader.models import ATResponse, ModemStatus, PendingMessage, SMSMessage, now_utc
 from sms_reader.utils import (
     create_merged_message,
     decode_pdu,
@@ -37,7 +37,6 @@ from sms_reader.utils import (
     extract_part_info,
     is_message_complete,
     is_single_message,
-    now_utc,
     parse_sms_timestamp,
     parse_text_mode_response,
     sort_message_parts,

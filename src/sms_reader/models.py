@@ -6,8 +6,6 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
-from sms_reader.utils import now_utc
-
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +17,10 @@ _QUALITY_GOOD_THRESHOLD = 15  # RSSI value for good signal quality
 _QUALITY_FAIR_THRESHOLD = 10  # RSSI value for fair signal quality
 _QUALITY_POOR_THRESHOLD = 0  # RSSI value for poor signal quality
 _QUALITY_NO_SIGNAL_VALUE = 99  # RSSI value for no signal
+
+
+def now_utc() -> datetime.datetime:
+    return datetime.datetime.now(datetime.UTC)
 
 
 class SignalQuality(StrEnum):
