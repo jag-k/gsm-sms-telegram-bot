@@ -1,7 +1,10 @@
 import logging
 
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+
+import logfire as lf
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -9,7 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s [%(name)s]: %(message)s",
-    level=logging.WARNING,
+    level=logging.WARNING,  # Default logging level for non-project modules
 )
 
 
@@ -72,6 +75,7 @@ class LogfireSettings(BaseModel):
 
     token: str | None = Field(None, description="Logfire API token")
     environment: Literal["local", "production"] = Field("local", description="Logfire environment name")
+    revision: str = Field("main", description="Git revision. Branch name or commit hash.")
 
 
 class Settings(BaseSettings):
@@ -89,6 +93,39 @@ class Settings(BaseSettings):
         env_nested_delimiter="__",
     )
 
+    log_level: lf.LevelName = Field("info", description="Logging level")
+
     bot: BotSettings = Field(default_factory=BotSettings, description="Settings for the SMS Telegram Bot")
     modem: ModemSettings = Field(default_factory=ModemSettings, description="Settings for the GSM Modem")
     logfire: LogfireSettings = Field(default_factory=LogfireSettings, description="Settings for Logfire")
+
+
+def configure_logfire_and_logging(settings: Settings) -> None:
+    """Configure Logfire and logging based on the provided settings."""
+
+    logging.basicConfig(handlers=[lf.LogfireLoggingHandler()])
+    logging.getLogger("bot").setLevel(settings.log_level.upper())
+    logging.getLogger("sms_reader").setLevel(settings.log_level.upper())
+
+    lf.configure(
+        local=settings.logfire.environment == "local",
+        send_to_logfire="if-token-present",
+        token=settings.logfire.token,
+        environment=settings.logfire.environment,
+        console=lf.ConsoleOptions(
+            verbose=True,
+            min_log_level=settings.log_level,
+        ),
+        code_source=lf.CodeSource(
+            repository="https://github.com/jag-k/gsm-sms-telegram-bot",
+            revision=settings.logfire.revision,
+        ),
+    )
+    lf.instrument_system_metrics()
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    settings = Settings()
+    configure_logfire_and_logging(settings)
+    return settings

@@ -8,6 +8,10 @@ Settings for the SMS Telegram Bot.
 
 All settings can be overridden with environment variables.
 
+| Name        | Type                                                                                                  | Default  | Description   | Example  |
+|-------------|-------------------------------------------------------------------------------------------------------|----------|---------------|----------|
+| `LOG_LEVEL` | `"trace"` \| `"debug"` \| `"info"` \| `"notice"` \| `"warn"` \| `"warning"` \| `"error"` \| `"fatal"` | `"info"` | Logging level | `"info"` |
+
 ### BotSettings
 
 Settings for the SMS Telegram Bot.
@@ -41,7 +45,8 @@ Settings for Logfire.
 
 **Environment Prefix**: `LOGFIRE__`
 
-| Name                   | Type                        | Default   | Description              | Example   |
-|------------------------|-----------------------------|-----------|--------------------------|-----------|
-| `LOGFIRE__TOKEN`       | `string` \| `NoneType`      | `null`    | Logfire API token        | `null`    |
-| `LOGFIRE__ENVIRONMENT` | `"local"` \| `"production"` | `"local"` | Logfire environment name | `"local"` |
+| Name                   | Type                        | Default   | Description                               | Example   |
+|------------------------|-----------------------------|-----------|-------------------------------------------|-----------|
+| `LOGFIRE__TOKEN`       | `string` \| `NoneType`      | `null`    | Logfire API token                         | `null`    |
+| `LOGFIRE__ENVIRONMENT` | `"local"` \| `"production"` | `"local"` | Logfire environment name                  | `"local"` |
+| `LOGFIRE__REVISION`    | `string`                    | `"main"`  | Git revision. Branch name or commit hash. | `"main"`  |

@@ -56,7 +56,7 @@ repos:
           - types-cachetools
           - types-pytz
   - repo: https://github.com/astral-sh/uv-pre-commit
-    rev: 0.6.3
+    rev: 0.6.4
     hooks:
       - id: uv-lock
   - repo: https://github.com/jag-k/pydantic-settings-export
@@ -64,3 +64,5 @@ repos:
     hooks:
       - id: pydantic-settings-export
         files: ^src/config\.py$
+        additional_dependencies:
+          - logfire

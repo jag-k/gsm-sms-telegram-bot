@@ -10,9 +10,9 @@ from bot.utils import (
     format_phone_number,
     is_valid_phone_number,
     retry_telegram_api,
-    settings,
     unauthorized_response,
 )
+from config import get_settings
 from sms_reader import GSMModem, SMSMessage
 from telegram import BotCommand, Update
 from telegram.constants import ParseMode
@@ -29,6 +29,7 @@ from telegram.ext import (
 
 logger = logging.getLogger(__name__)
 
+settings = get_settings()
 
 # Globals
 WAITING_FOR_NUMBER, WAITING_FOR_MESSAGE = range(2)

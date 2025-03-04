@@ -40,13 +40,14 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v3
 
-      - name: Get version
-        id: get_version
+      - name: Get info
+        id: info
         run: |
           json_output=$(uvx --quiet hatch --quiet project metadata)
           echo "version=$(echo $json_output | jq -r '.version')" >> $GITHUB_OUTPUT
           echo "license=$(echo $json_output | jq -r '.license')" >> $GITHUB_OUTPUT
           echo "description=$(echo $json_output | jq -r '.description')" >> $GITHUB_OUTPUT
+          echo "created_at=$(date +%Y-%m-%dT%H:%M:%S.%NZ)" >> $GITHUB_OUTPUT
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
@@ -56,14 +57,17 @@ jobs:
           platforms: linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.get_version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.info.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            PYTHON_VERSION=3.13
+            LOGFIRE__REVISION=${{ github.ref_name }}
           labels: |
             org.opencontainers.image.source=${{ github.repository }}
-            org.opencontainers.image.created=${{ github.event.created_at }}
+            org.opencontainers.image.created=${{ steps.info.outputs.created_at }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.url=${{ github.event.repository.html_url }}
-            org.opencontainers.image.version=${{ steps.get_version.outputs.version }}
-            org.opencontainers.image.licenses=${{ steps.get_version.outputs.license }}
-            org.opencontainers.image.description=${{ steps.get_version.outputs.description }}
+            org.opencontainers.image.version=${{ steps.info.outputs.version }}
+            org.opencontainers.image.licenses=${{ steps.info.outputs.license }}
+            org.opencontainers.image.description=${{ steps.info.outputs.description }}

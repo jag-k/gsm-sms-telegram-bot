@@ -29,4 +29,7 @@ COPY --from=build /app/.venv /app/.venv
 COPY . /app
 ENV PATH="/app/.venv/bin:$PATH"
 
+ARG LOGFIRE__REVISION=main
+ENV LOGFIRE__REVISION=LOGFIRE__REVISION
+
 CMD ["python", "src/main.py"]

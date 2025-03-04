@@ -6,14 +6,14 @@ from collections.abc import Awaitable, Callable
 
 import phonenumbers
 
-from config import Settings
+from config import get_settings
 from phonenumbers import NumberParseException
 from telegram import Update
 from telegram.error import NetworkError, RetryAfter, TimedOut
 from telegram.ext import ContextTypes
 
 
-settings = Settings()
+settings = get_settings()
 
 logger = logging.getLogger(__name__)
 

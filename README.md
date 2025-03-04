@@ -3,6 +3,7 @@
 [![Python](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![pre-commit.ci status](https://results.pre-commit.ci/badge/github/jag-k/gsm-sms-telegram-bot/main.svg)](https://results.pre-commit.ci/latest/github/jag-k/gsm-sms-telegram-bot/main)
 [![Docker Image](https://ghcr-badge.egpl.dev/jag-k/gsm-sms-telegram-bot/latest_tag)](https://github.com/jag-k/gsm-sms-telegram-bot/pkgs/container/gsm-sms-telegram-bot)
 [![Docker Image Size](https://ghcr-badge.egpl.dev/jag-k/gsm-sms-telegram-bot/size)](https://github.com/jag-k/gsm-sms-telegram-bot/pkgs/container/gsm-sms-telegram-bot)
 [![GitHub License](https://img.shields.io/github/license/jag-k/gsm-sms-telegram-bot)](https://github.com/jag-k/gsm-sms-telegram-bot/blob/main/LICENSE)
