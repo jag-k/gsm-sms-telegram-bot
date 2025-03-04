@@ -112,6 +112,9 @@ class SMSMessage:
             if timestamp.tzinfo is None:
                 timestamp = timestamp.replace(tzinfo=datetime.UTC)
             data["timestamp"] = timestamp
+        else:
+            logger.debug(f"Timestamp is None! {data=}")
+
         return cls(**data)
 
     def to_dict(self) -> dict[str, Any]:
