@@ -583,7 +583,6 @@ class GSMModem:
         self.contacts.update(contacts)
         return contacts
 
-    @logfire.instrument("Run SMS Monitoring")
     async def run_sms_monitoring(
         self,
         callback: Callable[[SMSMessage], Any] | None = None,
