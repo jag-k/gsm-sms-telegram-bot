@@ -409,7 +409,10 @@ class GSMModem:
 
         # Check if the message is within the merge timeout
         now = datetime.datetime.now(datetime.UTC)
-        time_diff = (now - pending["timestamp"]).total_seconds()
+        timestamp = pending["timestamp"]
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=datetime.UTC)
+        time_diff = (now - timestamp).total_seconds()
 
         if time_diff > self._merge_timeout:
             # Too old, don't merge
@@ -466,7 +469,10 @@ class GSMModem:
         # Find expired messages
         expired_senders = []
         for sender, pending in self._pending_messages.items():
-            time_diff = (now - pending["timestamp"]).total_seconds()
+            timestamp = pending["timestamp"]
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=datetime.UTC)
+            time_diff = (now - timestamp).total_seconds()
             if time_diff > self._merge_timeout:
                 expired_senders.append(sender)
 
