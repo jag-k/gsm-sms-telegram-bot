@@ -1,5 +1,4 @@
 import asyncio
-import html
 import logging
 import re
 
@@ -199,13 +198,7 @@ class SMSBot:
         await self.store_sms_message(sms)
 
         # Format the message
-
-        message_text = (
-            f"📩 <b>New SMS received</b>\n\n"
-            f"<b>From:</b> {sms.sender}\n"
-            f"<b>Time:</b> {sms.timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-            f"<blockquote>{html.escape(sms.text)}</blockquote>"
-        )
+        message_text = f"📩 <b>New SMS received</b>\n\n{sms.to_html()}"
 
         # Send it to the allowed user with retry
         try:
@@ -232,22 +225,8 @@ class SMSBot:
 
         async with self.bot_data_lock:
             # Initialize a message list if it doesn't exist
-            if "sms_messages" not in bot_data:
-                self.application.bot_data["sms_messages"] = []
-
-            # Convert SMSMessage to a dictionary for storage
-            sms_dict = {
-                "index": sms.index,
-                "sender": sms.sender,
-                "clean_sender": sms.clean_sender,
-                "text": sms.text,
-                "timestamp": sms.timestamp.isoformat(),
-                "is_alphanumeric": sms.is_alphanumeric,
-                "sender_type": sms.sender_type,
-            }
-
-            # Add to the list
-            bot_data["sms_messages"].append(sms_dict)
+            bot_data.setdefault("sms_messages", [])
+            bot_data["sms_messages"].append(sms.to_dict())
 
             # Log the storage
             logger.info(f"Stored SMS from {sms.sender} in persistence storage")
@@ -314,7 +293,7 @@ class SMSBot:
         await self.set_bot_commands(update.effective_chat.id, include_cancel=False)
 
         # Get messages from storage
-        messages = context.bot_data.get("sms_messages", [])
+        messages: list[SMSMessage] = [SMSMessage.from_dict(msg) for msg in context.bot_data.get("sms_messages", [])]
         total_messages = len(messages)
 
         if not messages:
@@ -322,21 +301,16 @@ class SMSBot:
             return
 
         # Sort messages by timestamp (newest first)
-        sorted_messages = sorted(messages, key=lambda x: datetime.fromisoformat(x["timestamp"]), reverse=True)
+        sorted_messages = sorted(messages, key=lambda x: x.timestamp, reverse=True)
 
         # Take only the most recent ones
         recent_messages = sorted_messages[: settings.bot.recent_messages_count]
 
         # Create response text
-        response = f"📋 <b>Recent SMS Messages</b> (showing {len(recent_messages)} of {total_messages})\n\n"
-
-        for msg in recent_messages:
-            timestamp = datetime.fromisoformat(msg["timestamp"]).strftime("%Y-%m-%d %H:%M")
-            response += (
-                f"<b>From:</b> {msg['sender']}\n"
-                f"<b>Time:</b> {timestamp}\n"
-                f"<blockquote>{html.escape(msg['text'])}</blockquote>\n\n"
-            )
+        response = (
+            f"📋 <b>Recent SMS Messages</b> (showing {len(recent_messages)} of {total_messages})\n\n"
+            f"{'\n\n'.join(msg.to_html() for msg in recent_messages)}"
+        )
 
         await update.message.reply_text(response, parse_mode=ParseMode.HTML)
 

@@ -1,8 +1,11 @@
 import asyncio
 import datetime
+import html
 import logging
 import re
 import string
+import time
+import zoneinfo
 
 from asyncio import StreamReader, StreamWriter
 from collections.abc import Awaitable, Callable
@@ -101,6 +104,37 @@ class SMSMessage:
     timestamp: datetime.datetime
     is_alphanumeric: bool
     sender_type: int | None = None  # Type of address (0x91=international, 0x81=national, 0x50/0xD0=alphanumeric)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SMSMessage":
+        timestamp: str | None = data.pop("timestamp", None)
+        if timestamp:
+            ts = datetime.datetime.fromisoformat(timestamp)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=datetime.UTC)
+            data["timestamp"] = ts
+        return cls(**data)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "index": self.index,
+            "sender": self.sender,
+            "clean_sender": self.clean_sender,
+            "text": self.text,
+            "timestamp": self.timestamp.isoformat(),
+            "is_alphanumeric": self.is_alphanumeric,
+            "sender_type": self.sender_type,
+        }
+
+    def to_html(self) -> str:
+        timezone_name = time.tzname[0]  # Get the system timezone name string
+        tz_object = zoneinfo.ZoneInfo(timezone_name)  # Create `tzinfo` object from name
+        ts = self.timestamp.astimezone(tz_object)
+        return (
+            f"<b>From:</b> {self.sender}\n"
+            f"<b>Time:</b> {ts.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"<blockquote>{html.escape(self.text)}</blockquote>"
+        )
 
 
 @dataclass
