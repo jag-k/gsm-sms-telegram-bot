@@ -105,12 +105,13 @@ class SMSMessage:
 
     @classmethod
     def from_dict(cls, data: dict) -> "SMSMessage":
-        timestamp: str | None = data.pop("timestamp", None)
+        timestamp: str | datetime.datetime | None = data.pop("timestamp", None)
         if timestamp:
-            ts = datetime.datetime.fromisoformat(timestamp)
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=datetime.UTC)
-            data["timestamp"] = ts
+            if isinstance(timestamp, str):
+                timestamp = datetime.datetime.fromisoformat(timestamp)
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=datetime.UTC)
+            data["timestamp"] = timestamp
         return cls(**data)
 
     def to_dict(self) -> dict[str, Any]:
