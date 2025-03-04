@@ -1,9 +1,16 @@
 import datetime
 import logging
+import re
 import string
 
 import messaging.sms
 
+from sms_reader.consts import (
+    ASCII_SMS_LENGTH,
+    OTP_KEYWORDS,
+    UNICODE_CHAR_THRESHOLD,
+    UNICODE_SMS_LENGTH,
+)
 from sms_reader.models import PendingMessage, SMSMessage
 
 
@@ -222,3 +229,72 @@ def extract_part_info(text: str) -> tuple[int, int] | None:
     except (ValueError, IndexError):
         pass
     return None
+
+
+def is_single_message(sms: SMSMessage) -> bool:
+    """Check if SMS is a single complete message (not multipart).
+
+    :param sms: The SMS message to check
+    :return: True if this is a single complete message
+    """
+    # Check for explicit part markers
+    part_info = extract_part_info(sms.text)
+    if part_info:
+        return False
+
+    # Check message length against limits
+    is_unicode = any(ord(c) > UNICODE_CHAR_THRESHOLD for c in sms.text)
+    sms_limit = UNICODE_SMS_LENGTH if is_unicode else ASCII_SMS_LENGTH
+    return len(sms.text) < sms_limit
+
+
+def is_otp_message(sms: SMSMessage) -> bool:
+    """Check if the message appears to be an OTP (One-Time Password).
+
+    :param sms: The SMS message to check
+    :return: True if this appears to be an OTP message
+    """
+    text_lower = sms.text.lower()
+
+    # Check for OTP keywords
+    for keyword in OTP_KEYWORDS:
+        if keyword in text_lower:
+            return True
+
+    # Look for patterns like "code: 123456" or standalone 4-6 digit numbers
+    # This regex looks for 4-6 digit numbers either standalone or after a colon/equals
+    digit_match = re.search(r"(?:[:=]\s*)?(\d{4,6})\b", text_lower)
+    if digit_match:
+        return True
+
+    return False
+
+
+def is_message_complete(pending: PendingMessage) -> bool:
+    """Check if a multipart message is complete.
+
+    :param pending: The pending message information.
+    :return: True if the message appears to be complete.
+    """
+    # Check if we have all expected parts
+    if pending.get("expected_parts") and len(pending["parts"]) >= pending["expected_parts"]:
+        logger.info(f"Message complete: {len(pending['parts'])}/{pending['expected_parts']} parts")
+        return True
+
+    # Fallback to text pattern recognition
+    return check_if_last_part(pending)
+
+
+def should_notify_multipart(pending: PendingMessage, is_complete: bool) -> bool:
+    """Check if we should send a notification for a multipart message.
+
+    :param pending: The pending message information
+    :param is_complete: Whether the message is complete
+    :return: True if notification should be sent
+    """
+    # Always notify when a message is complete
+    if is_complete:
+        return True
+
+    # For partial messages, only notify if not already notified
+    return not pending.get("notified", False)

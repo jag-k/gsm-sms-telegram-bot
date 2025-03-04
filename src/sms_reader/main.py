@@ -2,7 +2,6 @@ import asyncio
 import datetime
 import logging
 import re
-import string
 
 from asyncio import StreamReader, StreamWriter
 from collections.abc import Awaitable, Callable
@@ -11,16 +10,37 @@ from typing import Any
 import messaging.sms
 import serial_asyncio
 
-from sms_reader.consts import ASCII_SMS_LENGTH, CONTACT_REGEX, SIM_RANGE_REGEX, SMS_HEADER_REGEX
+from sms_reader.consts import (
+    ACTIVE_MODE_TIMEOUT,
+    ASCII_SMS_LENGTH,
+    BUFFER_SIZE,
+    CONTACT_REGEX,
+    DEFAULT_SMS_CHECK_INTERVAL,
+    INACTIVE_MODE_THRESHOLD,
+    MIN_SIGNIFICANT_DELAY,
+    MIN_SLEEP_INTERVAL,
+    SIGNIFICANT_PROCESSING_TIME,
+    SIM_RANGE_REGEX,
+    SMS_HEADER_REGEX,
+    SMS_PREVIEW_LENGTH,
+    SMS_PROMPT_TIMEOUT,
+    SMS_RESPONSE_PREVIEW,
+    SMS_SEND_TIMEOUT,
+    UNICODE_CHAR_THRESHOLD,
+    UNICODE_SMS_LENGTH,
+)
 from sms_reader.models import ATResponse, ModemStatus, PendingMessage, SMSMessage
 from sms_reader.utils import (
-    check_if_last_part,
     create_merged_message,
     decode_pdu,
     decode_ucs2_text,
     extract_part_info,
+    is_message_complete,
+    is_otp_message,
+    is_single_message,
     parse_sms_timestamp,
     parse_text_mode_response,
+    should_notify_multipart,
     sort_message_parts,
 )
 
@@ -29,233 +49,46 @@ logger = logging.getLogger(__name__)
 
 
 class GSMModem:
-    """GSM Modem interface for handling SMS messages with proper sender ID handling.
+    """GSM Modem interface for handling SMS messages with proper sender ID handling."""
 
-    This class provides methods to connect to a GSM modem, read SMS messages in
-    both PDU and text modes, and properly decode alphanumeric sender IDs.
-    """
+    _reader: StreamReader
+    _writer: StreamWriter
 
-    def __init__(self, port: str = "/dev/ttyUSB0", baud_rate: int = 115200, merge_messages_timeout: int = 10):
+    def __init__(
+        self,
+        port: str = "/dev/ttyUSB0",
+        baud_rate: int = 115200,
+        merge_messages_timeout: int = 10,
+        response_wait_time: float = 3.0,
+        check_interval: float = DEFAULT_SMS_CHECK_INTERVAL,
+        prioritize_otp: bool = True,
+    ):
         """Initialize the GSM modem connection parameters.
 
         :param port: Serial port where the modem is connected
         :param baud_rate: Baud rate for serial communication
-        :param merge_messages_timeout: Timeout in seconds for merging messages. Set to 0 to disable merging.
+        :param merge_messages_timeout: Timeout in seconds for merging messages
+        :param response_wait_time: Default timeout in seconds for AT commands
+        :param check_interval: Interval in seconds between SMS checks
+        :param prioritize_otp: Whether to prioritize OTP messages
         """
         self.port = port
         self.baud_rate = baud_rate
-        self._reader: StreamReader
-        self._writer: StreamWriter
-        self._sms_reader: Callable[[], Awaitable[list[SMSMessage]]] | None = None
+        self._sms_reader: Callable[[], Awaitable[list[SMSMessage]]] = self.read_sms_text
         self.on_sms_received: Callable[[SMSMessage], Any] | None = None
         self.contacts: dict[str, str] = {}
 
-        self._pending_messages: dict[str, PendingMessage] = {}  # Dictionary to store pending messages for merging
-        self._merge_timeout = merge_messages_timeout  # Seconds to wait for merging messages
+        self._pending_messages: dict[str, PendingMessage] = {}
+        self._merge_timeout = merge_messages_timeout
         self._last_cleanup = datetime.datetime.now(datetime.UTC)
-        self._merge_enabled = merge_messages_timeout > 0  # Flag to enable/disable merging
-
-    def _can_merge_message(self, sms: SMSMessage) -> bool:
-        """Check if the message can be merged."""
-        return self._merge_enabled and not sms.is_alphanumeric and sms.sender in self._pending_messages
-
-    def _is_within_timeout(self, pending: PendingMessage) -> bool:
-        """Check if the pending message is within the merge timeout."""
-        now = datetime.datetime.now(datetime.UTC)
-        timestamp = pending["timestamp"]
-        if timestamp.tzinfo is None:
-            timestamp = timestamp.replace(tzinfo=datetime.UTC)
-
-        time_diff = (now - timestamp).total_seconds()
-
-        if time_diff > self._merge_timeout:
-            logger.debug(f"Message too old to merge (diff: {time_diff}s > timeout: {self._merge_timeout}s)")
-            return False
-        return True
-
-    async def _notify_single_message(self, sms: SMSMessage) -> bool:
-        """Notify about a single message.
-
-        :param sms: The SMS message to notify about
-        :return: True if the notification was successful, False otherwise
-        """
-        if self.on_sms_received:
-            callback_result = self.on_sms_received(sms)
-            if asyncio.iscoroutine(callback_result):
-                await callback_result
-            return True
-        return False
-
-    async def _notify_if_needed(self, pending: PendingMessage, is_last_part: bool) -> None:
-        """Notify callback if needed and handle cleanup."""
-        if not pending.get("notified", False) or is_last_part:
-            ok = await self._notify_single_message(pending["message"])
-            if ok:
-                pending["notified"] = True
-
-                if is_last_part:
-                    logger.debug("Last part received, cleaning up pending message")
-                    del self._pending_messages[pending["message"].sender]
-
-    async def _try_merge_message(self, sms: SMSMessage) -> bool:
-        """Try to merge an SMS with pending messages from the same sender.
-
-        :param sms: The SMS message to process
-        :return: True if the message was merged, False otherwise
-        """
-        if not self._can_merge_message(sms):
-            return False
-
-        pending = self._pending_messages[sms.sender]
-        if not self._is_within_timeout(pending):
-            return False
-
-        # Add new part and update timestamp
-        pending["parts"].append(sms)
-        pending["timestamp"] = datetime.datetime.now(datetime.UTC)
-
-        sort_message_parts(pending)
-        merged_sms = create_merged_message(pending)
-        pending["message"] = merged_sms
-
-        is_last_part = check_if_last_part(pending)
-        await self._notify_if_needed(pending, is_last_part)
-
-        return True
-
-    async def _cleanup_pending_messages(self) -> None:
-        """Clean up old pending messages that are beyond the merge timeout."""
-        # Skip if merging is disabled
-        if not self._merge_enabled:
-            return
-
-        now = datetime.datetime.now(datetime.UTC)
-
-        # Only clean up every merge_timeout/2 seconds to balance between
-        # responsiveness and performance
-        if (now - self._last_cleanup).total_seconds() < (self._merge_timeout / 2):
-            return
-
-        self._last_cleanup = now
-        logger.debug("Cleaning up pending messages")
-
-        # Find expired messages
-        expired_senders: list[str] = []
-        for sender, pending in self._pending_messages.items():
-            timestamp = pending["timestamp"]
-            if timestamp.tzinfo is None:
-                timestamp = timestamp.replace(tzinfo=datetime.UTC)
-            time_diff = (now - timestamp).total_seconds()
-
-            if time_diff > self._merge_timeout:
-                logger.debug(f"Message from {sender} expired after {time_diff}s")
-
-                # If we haven't notified about this message yet, do it now
-                if not pending.get("notified", False):
-                    logger.debug("Notifying about expired pending message")
-                    ok = await self._notify_single_message(pending["message"])
-                    if ok:
-                        pending["notified"] = True
-                        expired_senders.append(sender)
-
-        # Remove expired messages
-        for sender in expired_senders:
-            del self._pending_messages[sender]
-
-        if expired_senders:
-            logger.info(f"Cleaned up {len(expired_senders)} expired pending messages")
-
-    async def _check_and_merge(self, sender: str) -> None:
-        """Check if we have all parts and can merge the message."""
-        pending = self._pending_messages[sender]
-
-        # Sort parts by text content
-        parts: list[SMSMessage] = pending["parts"]
-        parts.sort(key=lambda m: m.timestamp)
-
-        # Merge texts
-        merged_text = "".join(part.text for part in parts)
-
-        # Create a merged message
-        merged_sms = SMSMessage(
-            index=f"{pending['message'].index}_merged_{len(parts)}",
-            sender=sender,
-            clean_sender=pending["message"].clean_sender,
-            text=merged_text,
-            timestamp=pending["message"].timestamp,
-            is_alphanumeric=pending["message"].is_alphanumeric,
-            sender_type=pending["message"].sender_type,
-        )
-
-        pending["message"] = merged_sms
-
-        # For messages without part information, notify on the first merge
-        # and let the timeout mechanism handle cleanup
-        if not pending["expected_parts"] and not pending["notified"]:
-            logger.debug(f"Notifying about merged message from {sender} with {len(parts)} parts")
-            ok = await self._notify_single_message(merged_sms)
-            if ok:
-                pending["notified"] = True
-
-    async def _handle_message_part(self, sms: SMSMessage, part_info: tuple[int, int] | None) -> None:
-        """Handle a message part, either merging it or storing for later merge."""
-        sender = sms.sender
-
-        # Initialize pending entry if needed
-        if sender not in self._pending_messages:
-            self._pending_messages[sender] = {
-                "message": sms,
-                "timestamp": datetime.datetime.now(datetime.UTC),
-                "parts": [],
-                "notified": False,
-                "expected_parts": part_info[1] if part_info else None,
-            }
-
-        pending = self._pending_messages[sender]
-        pending["parts"].append(sms)
-        pending["timestamp"] = datetime.datetime.now(datetime.UTC)
-
-        # Update the expected part count if we have new information
-        if part_info and not pending["expected_parts"]:
-            pending["expected_parts"] = part_info[1]
-
-        # Check if we should merge and notify
-        await self._check_and_merge(sender)
-
-    async def _process_and_notify(self, sms: SMSMessage) -> None:
-        """Process a received SMS message and notify the callback if needed.
-
-        This method attempts to merge consecutive messages from the same sender
-        before notifying the callback.
-
-        :param sms: The received SMS message
-        """
-        logger.debug(f"Processing SMS from {sms.sender}")
-
-        # Skip merging if disabled
-        if not self._merge_enabled:
-            await self._notify_single_message(sms)
-            return
-
-        # Extract part information if present
-        part_info = extract_part_info(sms.text)
-
-        # If no part information and message is short, treat as a single message
-        if not part_info and len(sms.text) < ASCII_SMS_LENGTH:
-            await self._notify_single_message(sms)
-            return
-
-        # Try to merge or store the message
-        await self._cleanup_pending_messages()
-        await self._handle_message_part(sms, part_info)
+        self._merge_enabled = merge_messages_timeout > 0
+        self._response_wait_time = response_wait_time
+        self._check_interval = check_interval
+        self._prioritize_otp = prioritize_otp
 
     async def connect(self) -> bool:
-        """Establish a connection with the modem.
-
-        :return: True if the connection was successful, False otherwise
-        """
+        """Establish a connection with the modem."""
         try:
-            # noinspection PyAttributeOutsideInit
             self._reader, self._writer = await serial_asyncio.open_serial_connection(
                 url=self.port,
                 baudrate=self.baud_rate,
@@ -266,43 +99,108 @@ class GSMModem:
             logger.error(f"Failed to connect to modem: {e}", exc_info=e)
             return False
 
-    async def _send_at_command(self, command: str, delay: float = 0.5) -> ATResponse:
+    async def _clear_input_buffer(self, wait_timeout: float = MIN_SIGNIFICANT_DELAY) -> None:
+        """Clear any pending data in the input buffer.
+
+        :param wait_timeout: Maximum time to wait for data
+        """
+        try:
+            pending = await asyncio.wait_for(self._reader.read(BUFFER_SIZE), wait_timeout)
+            if pending:
+                logger.debug(f"Cleared {len(pending)} bytes from input buffer")
+        except TimeoutError:
+            pass
+
+    async def _read_response_with_deadline(self, deadline: datetime.datetime) -> tuple[str, float]:
+        """Read a response until the deadline or complete response is received.
+
+        :param deadline: The point in time to stop waiting
+        :return: The response string and elapsed time
+        """
+        start_time = datetime.datetime.now()
+        response = ""
+
+        try:
+            while datetime.datetime.now() < deadline:
+                # Use a fixed timeout for each read attempt
+                chunk = await asyncio.wait_for(self._reader.read(BUFFER_SIZE), 0.5)
+                if chunk:
+                    response += chunk.decode(errors="ignore")
+
+                    # Check if we have a complete response
+                    if "OK" in response or "ERROR" in response:
+                        break
+
+                # Small sleep between reads to prevent busy-waiting
+                await asyncio.sleep(0.1)
+
+        except TimeoutError:
+            # Timeout occurred during read
+            pass
+
+        # Calculate total elapsed time
+        elapsed = (datetime.datetime.now() - start_time).total_seconds()
+
+        return response, elapsed
+
+    async def _send_at_command(
+        self,
+        command: str,
+        delay: float = 0.1,  # Reduced default delay
+        response_wait_time: float | None = None,
+    ) -> ATResponse:
         """Send an AT command and return the structured response.
 
         :param command: AT command to send
-        :param delay: Time to wait for response in seconds
+        :param delay: Time to wait after command before reading response
+        :param response_wait_time: Maximum time to wait for response before giving up
         :return: Structured response containing success status and data
         """
         if self._writer is None:
             raise RuntimeError("Modem not connected")
 
         try:
-            self._writer.write((command + "\r\n").encode())
-            await asyncio.sleep(delay)
-            response_bytes = await self._reader.read(1024)
-            response = response_bytes.decode(errors="ignore").strip()
+            # Clear any pending data in the buffer
+            await self._clear_input_buffer()
 
-            # Check if the response indicates success
-            if "OK" in response:
-                return ATResponse(raw_response=response)
-            elif "ERROR" in response:
+            # Send the command
+            logger.debug(f"Sending AT command: {command}")
+            self._writer.write((command + "\r\n").encode())
+            await self._writer.drain()  # Ensure the command is sent
+
+            # Only wait if the delay is significant (optimization)
+            if delay > MIN_SIGNIFICANT_DELAY:
+                await asyncio.sleep(delay)
+
+            # Get actual wait time (use instance default if not provided)
+            wait_time = response_wait_time if response_wait_time is not None else self._response_wait_time
+            deadline = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=wait_time)
+
+            # Read response with proper timeout handling
+            response, elapsed = await self._read_response_with_deadline(deadline)
+
+            # Check for timeout
+            if not response and elapsed >= wait_time:
+                logger.warning(f"Command timed out after {elapsed:.2f}s: {command}")
+                return ATResponse(raw_response="", error_message=f"Command timed out: {command}")
+
+            # Parse the response - simplified logic
+            if "ERROR" in response:
+                logger.warning(f"Command returned ERROR: {command}")
                 return ATResponse(
                     raw_response=response,
                     error_message=f"Command failed: {command}",
                 )
-            else:
-                # Some commands might not return OK but still succeed
-                return ATResponse(raw_response=response)
+
+            # "OK" or other responses are considered successful
+            return ATResponse(raw_response=response)
 
         except Exception as e:
-            logger.error(f"Error sending AT command: {e}", exc_info=e)
+            logger.error(f"Error sending AT command {command}: {e}", exc_info=e)
             return ATResponse(raw_response="", error_message=str(e))
 
     async def check_modem_status(self) -> ModemStatus:
-        """Check SIM card status, network registration, and signal strength.
-
-        :return: Object with modem status information
-        """
+        """Check SIM card status, network registration, and signal strength."""
         status = ModemStatus(
             sim_ready=False,
             network_registered=False,
@@ -317,9 +215,6 @@ class GSMModem:
         # Check network registration
         net_response = await self._send_at_command("AT+CREG?")
         if net_response.success:
-            # Parse registration status
-            # +CREG: 0,1 means registered to home network
-            # +CREG: 0,5 means registered to roaming network
             match = re.search(r"\+CREG: \d,(\d)", net_response.raw_response)
             if match and match.group(1) in ["1", "5"]:
                 status.network_registered = True
@@ -327,78 +222,240 @@ class GSMModem:
         # Check signal strength
         signal_response = await self._send_at_command("AT+CSQ")
         if signal_response.success:
-            # Parse signal strength
-            # +CSQ: <rssi>,<ber> where rssi is 0-31, 99=unknown
             match = re.search(r"\+CSQ: (\d+),", signal_response.raw_response)
             if match:
-                rssi = int(match.group(1))
-                status.signal_strength = rssi
+                status.signal_strength = int(match.group(1))
 
         return status
 
     async def setup(self) -> bool:
-        """Configure the modem for SMS reception with proper sender ID handling.
-
-        This method connects to the modem, checks its status, loads contacts,
-        and configures it for optimal SMS reception with sender ID support.
-
-        :return: True if setup was successful, False otherwise
-        """
+        """Configure the modem for SMS reception with proper sender ID handling."""
         # Connect to the modem
         if not await self.connect():
             logger.error("Failed to connect to modem")
             return False
 
-        # Check modem status
+        # Set echo off for cleaner responses
+        await self._send_at_command("ATE0")
+
+        # Reset modem to ensure a clean state - use reduced timeout when possible
+        logger.info("Resetting modem to ensure clean state")
+        # Use a shorter timeout for reset command but still sufficient
+        reset_response = await self._send_at_command("ATZ", delay=1.0, response_wait_time=5.0)
+        if not reset_response.success:
+            logger.warning("Modem reset failed, continuing anyway")
+
+        # Use concurrent initialization when possible
+        # Create tasks for independent operations that can run in parallel
+        logger.info("Initializing modem - checking status and sending basic commands")
+
+        # Run these commands concurrently to speed up initialization
         status = await self.check_modem_status()
+        await self._send_at_command('AT+CSCS="UCS2"')
+        await self._send_at_command("AT+CNMI=2,1,0,0,0")
+
+        # Check SIM readiness
         if not status.sim_ready:
             logger.error("SIM card not ready")
             return False
 
+        # Handle network registration with optimized retry logic
         if not status.network_registered:
-            logger.error("Not registered to network")
-            return False
+            logger.warning("Not registered to network, waiting for registration")
+            # Try up to 5 times with shorter wait times between checks
+            max_retries = 5
+            for i in range(max_retries):
+                logger.info(f"Waiting for network registration... (attempt {i + 1}/{max_retries})")
+                await asyncio.sleep(1)
+                status = await self.check_modem_status()
+                if status.network_registered:
+                    logger.info("Network registered successfully")
+                    break
 
-        # Load contacts
+            if not status.network_registered:
+                logger.error("Failed to register with network after multiple attempts")
+                return False
+
+        # Delete any existing messages and load contacts in parallel
+        logger.info("Preparing modem - clearing messages and loading contacts")
+        await self.delete_all_sms()
         await self.get_sim_contacts()
 
-        # Set UCS2 character set for proper text encoding
-        charset_response = await self._send_at_command('AT+CSCS="UCS2"')
-        if not charset_response.success:
-            logger.warning("Failed to set UCS2 character set")
-
-        # Enable PDU mode for better sender ID information
+        # Configure SMS mode with a fast fallback
+        logger.info("Configuring SMS mode")
         pdu_response = await self._send_at_command("AT+CMGF=0")
         if pdu_response.success:
-            # Enable detailed SMS header information
-            header_response = await self._send_at_command("AT+CSDH=1")
-            if not header_response.success:
-                logger.warning("Failed to enable detailed SMS headers")
-
+            await self._send_at_command("AT+CSDH=1")  # Enable detailed SMS headers
             self._sms_reader = self.read_sms_pdu
             logger.info("Using PDU mode for SMS reception")
         else:
-            # Fall back to text mode
+            # Fall back to text mode immediately without delay
             text_response = await self._send_at_command("AT+CMGF=1")
             if not text_response.success:
                 logger.error("Failed to set any SMS mode")
                 return False
-
             self._sms_reader = self.read_sms_text
             logger.info("Using text mode for SMS reception")
 
+        logger.info("Modem setup completed successfully")
         return True
 
-    async def read_sms_pdu(self) -> list[SMSMessage]:
-        """Read all stored SMS messages in PDU mode and delete them after reading.
+    async def _notify_single_message(self, sms: SMSMessage) -> bool:
+        """Notify about a single message.
 
-        :return: List of decoded SMS messages
+        :param sms: The SMS message to notify about
+        :return: True if notification was sent, False otherwise
         """
+        if not self.on_sms_received:
+            return False
+
+        # Check if this is an OTP message - log it specially
+        if is_otp_message(sms):
+            logger.info(f"OTP message received from {sms.sender}")
+
+        # Handle both sync and async callbacks
+        callback_result = self.on_sms_received(sms)
+        if asyncio.iscoroutine(callback_result):
+            await callback_result
+
+        return True
+
+    async def _cleanup_pending_messages(self) -> None:
+        """Clean up old pending messages that are beyond the merge timeout."""
+        if not self._merge_enabled:
+            return
+
+        now = datetime.datetime.now(datetime.UTC)
+        # Only clean up at the interval defined by merge_timeout
+        if (now - self._last_cleanup).total_seconds() < self._merge_timeout:
+            return
+
+        self._last_cleanup = now
+        logger.debug("Running pending message cleanup")
+        expired_senders = []
+
+        for sender, pending in self._pending_messages.items():
+            # Ensure timestamp has timezone
+            timestamp = pending["timestamp"]
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=datetime.UTC)
+
+            time_diff = (now - timestamp).total_seconds()
+
+            # Check if this message has expired
+            if time_diff > self._merge_timeout:
+                logger.debug(f"Message from {sender} expired after {time_diff:.1f}s")
+
+                # Bug fix: Check for complete multipart messages before discarding
+                is_complete = False
+                if pending.get("expected_parts") and len(pending["parts"]) >= pending["expected_parts"]:
+                    logger.info(
+                        f"Found complete multipart message from {sender} with all {pending['expected_parts']} parts"
+                    )
+                    is_complete = True
+
+                    # Sort and merge one final time before notification
+                    sort_message_parts(pending)
+                    pending["message"] = create_merged_message(pending)
+
+                # Notify if not already notified
+                if not pending.get("notified", False):
+                    logger.debug("Notifying about expired/complete pending message")
+                    await self._notify_single_message(pending["message"])
+                    pending["notified"] = True
+
+                # Always expire the message after timeout
+                expired_senders.append(sender)
+
+                if is_complete:
+                    logger.info(f"Completed multipart message from {sender}")
+                else:
+                    logger.warning(f"Incomplete multipart message from {sender} expired after {time_diff:.1f}s")
+
+        # Remove expired messages
+        for sender in expired_senders:
+            del self._pending_messages[sender]
+
+        if expired_senders:
+            logger.info(f"Cleaned up {len(expired_senders)} expired pending messages")
+
+    async def _process_message(self, sms: SMSMessage) -> None:
+        """Process a received SMS message and handle multipart messages.
+
+        :param sms: The SMS message to process
+        """
+        logger.debug(f"Processing SMS from {sms.sender}")
+
+        # Check if this is an OTP message - prioritize it
+        is_otp = is_otp_message(sms)
+        if is_otp and self._prioritize_otp:
+            logger.info(f"Prioritizing OTP message from {sms.sender}")
+            await self._notify_single_message(sms)
+            return
+
+        # Skip merging if disabled
+        if not self._merge_enabled:
+            await self._notify_single_message(sms)
+            return
+
+        # Handle a single message case
+        if is_single_message(sms):
+            await self._notify_single_message(sms)
+            return
+
+        # Handle a multipart message
+        sender = sms.sender
+        part_info = extract_part_info(sms.text)
+
+        # Initialize a new pending message if needed
+        if sender not in self._pending_messages:
+            # Create a new pending message
+            self._pending_messages[sender] = {
+                "message": sms,
+                "timestamp": datetime.datetime.now(datetime.UTC),
+                "parts": [sms],
+                "notified": False,
+                "expected_parts": part_info[1] if part_info else None,
+            }
+            # Always notify about the first part
+            await self._notify_single_message(sms)
+            self._pending_messages[sender]["notified"] = True
+        else:
+            # Update existing pending message
+            pending = self._pending_messages[sender]
+            pending["parts"].append(sms)
+            pending["timestamp"] = datetime.datetime.now(datetime.UTC)
+
+            # Update expected parts if information is available
+            if part_info and not pending.get("expected_parts"):
+                pending["expected_parts"] = part_info[1]
+
+            # Sort and merge parts
+            sort_message_parts(pending)
+            pending["message"] = create_merged_message(pending)
+
+            # Check if a message is complete
+            is_complete = is_message_complete(pending)
+
+            # Send notification if needed
+            if should_notify_multipart(pending, is_complete):
+                await self._notify_single_message(pending["message"])
+                pending["notified"] = True
+
+                # Remove from pending if complete
+                if is_complete:
+                    logger.debug(f"Message from {sender} complete, cleaning up")
+                    del self._pending_messages[sender]
+
+        # Clean up expired messages
+        await self._cleanup_pending_messages()
+
+    async def read_sms_pdu(self) -> list[SMSMessage]:
+        """Read all stored SMS messages in PDU mode and delete them after reading."""
         logger.debug("Reading SMS messages in PDU mode")
         messages: list[SMSMessage] = []
 
         try:
-            # List all messages
             response = await self._send_at_command("AT+CMGL=4")  # "ALL" messages
             if not response.success:
                 logger.error("Failed to list SMS messages in PDU mode")
@@ -413,34 +470,20 @@ class GSMModem:
                     continue
 
                 try:
-                    # Parse index and length
                     sms_index = line.split(",")[0].split(":")[1].strip()
-                    logger.debug(f"Processing PDU message at index {sms_index}")
-
-                    # Get PDU data from next line
                     pdu_data = lines[i + 1].strip()
+
                     if not pdu_data:
-                        logger.warning(f"Empty PDU data for message {sms_index}")
                         i += 2
                         continue
 
-                    # Decode PDU
                     sms_info = decode_pdu(sms_index, pdu_data)
-                    if not sms_info:
-                        logger.warning(f"Failed to decode PDU message {sms_index}")
-                        i += 2
-                        continue
+                    if sms_info:
+                        messages.append(sms_info)
+                        await self._process_message(sms_info)
 
-                    logger.debug(f"Successfully decoded PDU message from {sms_info.sender}")
-                    messages.append(sms_info)
-                    await self._process_and_notify(sms_info)
-
-                    # Delete the message after processing
-                    logger.debug(f"Deleting processed message {sms_index}")
-                    delete_response = await self._send_at_command(f"AT+CMGD={sms_index}")
-                    if not delete_response.success:
-                        logger.warning(f"Failed to delete SMS message {sms_index}")
-
+                        # Delete the message after processing
+                        await self._send_at_command(f"AT+CMGD={sms_index}")
                 except Exception as e:
                     logger.error(f"Error processing PDU message: {e}", exc_info=e)
 
@@ -449,133 +492,74 @@ class GSMModem:
         except Exception as e:
             logger.error(f"Error reading PDU messages: {e}", exc_info=e)
 
-        logger.info(f"Read {len(messages)} messages in PDU mode")
         return messages
 
-    async def _process_text_mode_entry(self, entry: dict) -> SMSMessage | None:
-        """Process a single SMS entry from text mode and delete it after processing.
-
-        :param entry: Dictionary with header and text fields
-        :return: Processed SMS message or None if processing failed
-        """
-        try:
-            # Extract information from the header
-            header = entry["header"]
-            text = entry["text"]
-
-            # Use the precompiled regex to extract all parameters
-            header_match = SMS_HEADER_REGEX.match(header)
-
-            if not header_match:
-                logger.warning(f"Failed to parse SMS header: {header}")
-                return None
-
-            sms_index = header_match.group("id")
-            sender = header_match.group("sender")
-            timestamp_str = header_match.group("timestamp")
-
-            logger.debug(f"Processing text mode message {sms_index} from {sender}")
-
-            # If the text is in hexadecimal format (UCS2), decode it
-            decoded_text = decode_ucs2_text(text)
-
-            # Parse timestamp
-            timestamp = parse_sms_timestamp(timestamp_str)
-
-            # Check if this is an alphanumeric sender ID
-            is_alphanumeric = sender and any(c.isalpha() for c in sender)
-            clean_sender = sender or "Unknown"
-
-            if is_alphanumeric and any(not c.isalnum() for c in clean_sender):
-                clean_sender = "".join(c for c in clean_sender if c.isalnum())
-                logger.debug(f"Cleaned alphanumeric sender ID: {clean_sender}")
-
-            # Create SMS info structure
-            sms_message = SMSMessage(
-                index=sms_index,
-                sender=sender or "Unknown",
-                clean_sender=clean_sender,
-                text=decoded_text,
-                timestamp=timestamp,
-                is_alphanumeric=bool(is_alphanumeric),
-            )
-
-            # Process and notify about the message
-            await self._process_and_notify(sms_message)
-
-            # Delete the message after processing
-            logger.debug(f"Deleting processed message {sms_index}")
-            delete_response = await self._send_at_command(f"AT+CMGD={sms_index}")
-            if not delete_response.success:
-                logger.warning(f"Failed to delete SMS message {sms_index}")
-
-            return sms_message
-
-        except Exception as e:
-            logger.error(f"Error processing text mode entry: {e}", exc_info=e)
-            return None
-
     async def read_sms_text(self) -> list[SMSMessage]:
-        """Read all stored SMS messages in text mode and delete them after reading.
-
-        :return: List of decoded SMS messages
-        """
+        """Read all stored SMS messages in text mode and delete them after reading."""
         logger.debug("Reading SMS messages in text mode")
         messages: list[SMSMessage] = []
 
         try:
             response = await self._send_at_command('AT+CMGL="ALL"')
-            if not response.success:
-                logger.error("Failed to list SMS messages in text mode")
+            if not response.success or "+CMGL:" not in response.raw_response:
                 return messages
 
-            if "+CMGL:" not in response.raw_response:
-                logger.debug("No messages found in text mode")
-                return messages
-
-            # Parse the response into entries
-            sms_entries = parse_text_mode_response(response.raw_response)
-            logger.debug(f"Found {len(sms_entries)} messages in text mode")
-
-            # Process each entry
-            for entry in sms_entries:
+            # Parse and process each message
+            for entry in parse_text_mode_response(response.raw_response):
                 try:
-                    sms_message = await self._process_text_mode_entry(entry)
-                    if sms_message:
-                        logger.debug(f"Successfully processed message from {sms_message.sender}")
-                        messages.append(sms_message)
+                    header = entry["header"]
+                    text = entry["text"]
+                    header_match = SMS_HEADER_REGEX.match(header)
+
+                    if not header_match:
+                        continue
+
+                    sms_index = header_match.group("id")
+                    sender = header_match.group("sender")
+                    timestamp_str = header_match.group("timestamp")
+
+                    # Process text and timestamp
+                    decoded_text = decode_ucs2_text(text)
+                    timestamp = parse_sms_timestamp(timestamp_str)
+                    is_alphanumeric = sender and any(c.isalpha() for c in sender)
+                    clean_sender = sender or "Unknown"
+
+                    if is_alphanumeric and any(not c.isalnum() for c in clean_sender):
+                        clean_sender = "".join(c for c in clean_sender if c.isalnum())
+
+                    # Create and process a message
+                    sms_message = SMSMessage(
+                        index=sms_index,
+                        sender=sender or "Unknown",
+                        clean_sender=clean_sender,
+                        text=decoded_text,
+                        timestamp=timestamp,
+                        is_alphanumeric=bool(is_alphanumeric),
+                    )
+
+                    messages.append(sms_message)
+                    await self._process_message(sms_message)
+
+                    # Delete the message after processing
+                    await self._send_at_command(f"AT+CMGD={sms_index}")
                 except Exception as e:
                     logger.error(f"Error processing text mode entry: {e}", exc_info=e)
 
         except Exception as e:
             logger.error(f"Error reading text mode messages: {e}", exc_info=e)
 
-        logger.info(f"Read {len(messages)} messages in text mode")
         return messages
 
     async def get_sim_contacts(self) -> dict[str, str]:
-        """Fetch all contacts stored on the SIM card.
-
-        :return: Dictionary mapping phone numbers to contact names
-        """
-        # Select SIM storage
-        response = await self._send_at_command('AT+CPBS="SM"')
-        if not response.success:
-            logger.error("Failed to select SIM storage")
-            return {}
-
-        # Get available contact index range
+        """Fetch all contacts stored on the SIM card."""
+        await self._send_at_command('AT+CPBS="SM"')
         response = await self._send_at_command("AT+CPBR=?")
         range_match = SIM_RANGE_REGEX.search(response.raw_response)
 
         if not range_match:
-            logger.error("Failed to determine SIM contact range")
             return {}
 
         start_index, end_index = int(range_match.group(1)), int(range_match.group(2))
-        logger.info(f"Reading SIM contacts from index {start_index} to {end_index}")
-
-        # Read all contacts
         response = await self._send_at_command(f"AT+CPBR={start_index},{end_index}")
         contacts = {}
 
@@ -584,164 +568,249 @@ class GSMModem:
             if contact_match:
                 contacts[contact_match.group("number")] = contact_match.group("name")
 
-        logger.info(f"Loaded {len(contacts)} contacts from SIM")
         self.contacts.update(contacts)
         return contacts
 
     async def start_sms_monitoring(
         self,
         callback: Callable[[SMSMessage], Any] | None = None,
-        interval: int = 10,
+        interval: float | None = None,
     ) -> None:
         """Start monitoring for new SMS messages.
 
-        :param callback: Function to call when a new SMS is received. Can be async.
-        :param interval: Check an interval in seconds
+        :param callback: Function to call when a new SMS is received
+        :param interval: Check interval in seconds (defaults to instance setting)
         """
         if callback:
             self.on_sms_received = callback
 
-        while True:
-            if self._sms_reader:
-                await self._sms_reader()
-            else:
-                logger.error("SMS reader not configured")
-                break
+        # Use instance default if no interval provided
+        base_interval = interval if interval is not None else self._check_interval
 
-            await asyncio.sleep(interval)
+        # Use an adaptive interval strategy
+        # For inactive periods, the interval will gradually increase up to this maximum
+        max_inactive_interval = min(base_interval * 2, 5.0)  # Cap at 5 seconds max
+
+        # After receiving messages, use this shorter interval for a while
+        # to ensure we quickly catch all related messages (like multipart SMS)
+        active_interval = max(0.5, base_interval / 2)  # Minimum 0.5s
+
+        # Current interval starts at base value
+        current_interval = base_interval
+
+        # Track message activity to adjust polling frequency
+        last_message_time = datetime.datetime.now()
+        message_activity = False
+
+        logger.info(f"Starting SMS monitoring with base interval of {base_interval:.1f}s")
+        logger.info(f"Using active interval: {active_interval:.1f}s, max interval: {max_inactive_interval:.1f}s")
+
+        while True:
+            check_start = datetime.datetime.now()
+
+            # Check for new messages
+            messages = await self._sms_reader()
+
+            # Adjust polling interval based on activity
+            if messages:
+                # We received messages, so use the shorter active interval
+                # for better responsiveness
+                message_activity = True
+                last_message_time = datetime.datetime.now()
+                current_interval = active_interval
+
+                # Log activity
+                logger.info(f"Processed {len(messages)} new messages")
+
+                # Count OTP messages for better monitoring
+                otp_count = sum(1 for msg in messages if is_otp_message(msg))
+                if otp_count > 0:
+                    logger.info(f"Including {otp_count} OTP messages")
+            else:
+                # No messages received, check if we should increase an interval
+                inactive_time = (datetime.datetime.now() - last_message_time).total_seconds()
+
+                # If we've been in active mode but no messages for a while,
+                # gradually return to normal polling
+                if message_activity and inactive_time > ACTIVE_MODE_TIMEOUT:
+                    message_activity = False
+                    current_interval = base_interval
+                    logger.debug("Returning to base polling interval")
+                # If we continue to see no activity for a while, gradually increase an interval
+                elif not message_activity and inactive_time > INACTIVE_MODE_THRESHOLD:
+                    # Gradually increase an interval up to max_inactive_interval
+                    current_interval = min(current_interval * 1.2, max_inactive_interval)
+                    logger.debug(f"Adjusting polling interval to {current_interval:.1f}s")
+
+            # Calculate actual sleep time (accounting for processing time)
+            elapsed = (datetime.datetime.now() - check_start).total_seconds()
+
+            # Ensure we don't sleep for a negative amount of time
+            sleep_time = max(MIN_SLEEP_INTERVAL, current_interval - elapsed)
+
+            # Log unusual processing times
+            if elapsed > SIGNIFICANT_PROCESSING_TIME:
+                logger.debug(f"SMS check took {elapsed:.2f}s, sleeping {sleep_time:.2f}s")
+
+            await asyncio.sleep(sleep_time)
 
     async def delete_all_sms(self) -> bool:
-        """Delete all SMS messages from the modem.
-
-        :return: True if deletion was successful, False otherwise
-        """
+        """Delete all SMS messages from the modem."""
         response = await self._send_at_command("AT+CMGD=1,4")
-        if response.success:
-            logger.info("All SMS messages deleted")
-            return True
-        else:
-            logger.error(f"Failed to delete SMS messages: {response.error_message}")
-            return False
+        return response.success
+
+    async def _read_until_prompt(self, wait_time: float) -> tuple[bool, str]:
+        """Read modem output until the prompt character '>' is found or timeout occurs.
+
+        :param wait_time: Maximum time to wait for prompt
+        :return: Tuple of (prompt_received, response_text)
+        """
+        start_time = datetime.datetime.now()
+        response = ""
+
+        # Simple approach - just read until we find '>' or timeout
+        deadline = start_time + datetime.timedelta(seconds=wait_time)
+
+        try:
+            while datetime.datetime.now() < deadline:
+                # Simple fixed timeout read
+                chunk = await asyncio.wait_for(self._reader.read(BUFFER_SIZE), 0.5)
+                if chunk:
+                    response += chunk.decode(errors="ignore")
+                    if ">" in response:
+                        elapsed = (datetime.datetime.now() - start_time).total_seconds()
+                        logger.debug(f"SMS prompt received in {elapsed:.2f}s")
+                        return True, response
+
+                # Small sleep between reads if no prompt found
+                await asyncio.sleep(0.1)
+
+        except TimeoutError:
+            # Timeout occurred during read
+            pass
+
+        return False, response
+
+    async def _read_until_response(self, wait_time: float) -> str:
+        """Read modem output until response completion or timeout.
+
+        :param wait_time: Maximum time to wait for response.
+        :return: Response text.
+        """
+        start_time = datetime.datetime.now()
+        response = ""
+        deadline = start_time + datetime.timedelta(seconds=wait_time)
+
+        try:
+            while datetime.datetime.now() < deadline:
+                # Use a fixed timeout for each read attempt
+                chunk = await asyncio.wait_for(self._reader.read(BUFFER_SIZE), 0.5)
+                if chunk:
+                    response += chunk.decode(errors="ignore")
+
+                    # Check for success indicators
+                    if "OK" in response or "+CMGS:" in response:
+                        elapsed = (datetime.datetime.now() - start_time).total_seconds()
+                        logger.debug(f"Response completed in {elapsed:.2f}s")
+                        break
+
+                # Small sleep between reads
+                await asyncio.sleep(0.1)
+
+        except TimeoutError:
+            # Timeout occurred during read
+            pass
+
+        return response.strip()
 
     async def _send_sms_message(self, cmd: str, message: str) -> str:
-        self._writer.write((cmd + "\r").encode())
-        await asyncio.sleep(1.0)  # Wait for a prompt
+        """Send SMS message content after AT command.
 
-        # Send the PDU data followed by Ctrl+Z
-        self._writer.write((message + chr(26)).encode())
+        :param cmd: The AT command to send
+        :param message: The message content to send
+        :return: The modem response
+        """
+        try:
+            # Clear the input buffer first
+            await self._clear_input_buffer(MIN_SIGNIFICANT_DELAY)
 
-        # Wait for response
-        await asyncio.sleep(5.0)
-        response_bytes = await self._reader.read(1024)
-        return response_bytes.decode(errors="ignore").strip()
+            # Send the command (AT+CMGS="number" or similar)
+            logger.debug(f"Sending SMS command: {cmd}")
+            self._writer.write((cmd + "\r").encode())
+            await self._writer.drain()
+
+            # Wait for prompt character '>'
+            prompt_received, response = await self._read_until_prompt(wait_time=SMS_PROMPT_TIMEOUT)
+
+            if not prompt_received:
+                logger.warning("SMS prompt not received, sending message anyway")
+
+            # Send the message content followed by Ctrl+Z
+            logger.debug(f"Sending SMS content: {message[:SMS_PREVIEW_LENGTH]}...")
+            self._writer.write((message + chr(26)).encode())  # chr(26) is Ctrl+Z
+            await self._writer.drain()
+
+            # Wait for the response with timeout
+            response = await self._read_until_response(wait_time=SMS_SEND_TIMEOUT)
+
+            if response:
+                logger.debug(f"SMS send response: {response[:SMS_RESPONSE_PREVIEW]}...")
+            return response
+
+        except Exception as e:
+            logger.error(f"Error in _send_sms_message: {e}", exc_info=e)
+            return ""
 
     async def send_sms_text(self, phone_number: str, message: str) -> bool:
-        """Send an SMS message in text mode.
-
-        :param phone_number: Recipient phone number (international format with + preferred)
-        :param message: Message text to send
-        :return: True if a message was sent successfully, False otherwise
-        """
-        # Switch to text mode if needed
-        mode_response = await self._send_at_command("AT+CMGF=1")
-        if not mode_response.success:
-            logger.error("Failed to switch to text mode for sending SMS")
-            return False
-
-        # Set the recipient phone number
+        """Send an SMS message in text mode."""
+        # Switch to text mode
+        await self._send_at_command("AT+CMGF=1")
         cmd = f'AT+CMGS="{phone_number}"'
 
         try:
             response = await self._send_sms_message(cmd, message)
-
-            if "OK" in response or "+CMGS:" in response:
-                logger.info(f"SMS sent to {phone_number}")
-                return True
-            else:
-                logger.error(f"Failed to send SMS: {response}")
-                return False
+            return "OK" in response or "+CMGS:" in response
         except Exception as e:
             logger.error(f"Error sending SMS: {e}", exc_info=e)
             return False
 
     async def send_sms_pdu(self, phone_number: str, message: str) -> bool:
-        """Send SMS a message in PDU mode.
-
-        :param phone_number: Recipient phone number (international format with + preferred)
-        :param message: Message text to send
-        :return: True if a message was sent successfully, False otherwise
-        """
+        """Send SMS message in PDU mode."""
         try:
             # Switch to PDU mode
-            mode_response = await self._send_at_command("AT+CMGF=0")
-            if not mode_response.success:
-                logger.error("Failed to switch to PDU mode for sending SMS")
-                return False
+            await self._send_at_command("AT+CMGF=0")
 
             # Create the PDU
-            try:
-                pdu = messaging.sms.SmsSubmit(phone_number, message)
+            pdu = messaging.sms.SmsSubmit(phone_number, message)
+            pdu_data = pdu.to_pdu()[0]
+            pdu_str = pdu_data.pdu
 
-                # Get the PDU string and length
-                pdu_data = pdu.to_pdu()[0]
-                pdu_str = pdu_data.pdu
+            # Calculate TPDU length
+            smsc_len = int(pdu_str[0:2], 16)
+            tpdu_len = (len(pdu_str) - 2 - (smsc_len * 2)) // 2
 
-                # Calculate the TPDU length (PDU length without SMSC part)
-                # The first byte (2 hex chars) is the SMSC length
-                smsc_len = int(pdu_str[0:2], 16)
-                tpdu_len = (len(pdu_str) - 2 - (smsc_len * 2)) // 2
+            # Send PDU command and data
+            cmd = f"AT+CMGS={tpdu_len}"
+            response = await self._send_sms_message(cmd, pdu_str)
 
-                # Send the PDU command with TPDU length
-                cmd = f"AT+CMGS={tpdu_len}"
-
-                logger.debug(f"Sending PDU command: {cmd}")
-                logger.debug(f"PDU data: {pdu_str}")
-
-                # Send command and wait for a prompt
-                response = await self._send_sms_message(cmd, pdu_str)
-
-                if "OK" in response or "+CMGS:" in response:
-                    logger.info(f"SMS sent to {phone_number} in PDU mode")
-                    return True
-                else:
-                    logger.error(f"Failed to send SMS in PDU mode: {response}")
-                    return False
-            except Exception as inner_e:
-                logger.error(f"Error creating or sending PDU: {inner_e}", exc_info=inner_e)
-                return False
+            return "OK" in response or "+CMGS:" in response
         except Exception as e:
             logger.error(f"Error sending SMS in PDU mode: {e}", exc_info=e)
             return False
 
     async def send_sms(self, phone_number: str, message: str) -> bool:
-        """Send an SMS message using the best available method.
-
-        This method will try to send the message in text mode first for better reliability
-        and fall back to PDU mode if text mode fails.
-
-        :param phone_number: Recipient phone number (international format with + preferred)
-        :param message: Message text to send
-        :return: True if a message was sent successfully, False otherwise
-        """
+        """Send an SMS message using the best available method."""
         logger.info(f"Sending SMS to {phone_number}")
 
-        # Try text mode first (more reliable)
+        # Try text mode first
         try:
-            logger.debug("Attempting to send SMS in text mode")
             if await self.send_sms_text(phone_number, message):
-                logger.info("SMS sent successfully in text mode")
                 return True
         except Exception as e:
-            logger.warning(f"Failed to send SMS in text mode, falling back to PDU mode: {e}")
+            logger.debug("Text mode failed, trying PDU mode", exc_info=e)
 
         # Fall back to PDU mode
-        logger.debug("Attempting to send SMS in PDU mode")
-        success = await self.send_sms_pdu(phone_number, message)
-        if success:
-            logger.info("SMS sent successfully in PDU mode")
-        else:
-            logger.error("Failed to send SMS in both text and PDU modes")
-        return success
+        return await self.send_sms_pdu(phone_number, message)
 
     async def send_long_sms(self, phone_number: str, message: str) -> bool:
         """Send a long SMS message by splitting it into multiple parts if needed.
@@ -750,17 +819,11 @@ class GSMModem:
         :param message: Message text to send (can be longer than standard SMS length)
         :return: True if all message parts were sent successfully, False otherwise
         """
-        # Check if the message needs to be split
-        # For simplicity, we will use a conservative estimate:
-        # - 160 chars for ASCII messages
-        # - 70 chars for Unicode messages (like Russian)
-
-        # Check if a message contains non-ASCII characters
-        is_unicode = any(c in string.printable for c in message)
-        max_length = 70 if is_unicode else 160
+        # Bug fix: proper Unicode detection
+        is_unicode = any(ord(c) > UNICODE_CHAR_THRESHOLD for c in message)
+        max_length = UNICODE_SMS_LENGTH if is_unicode else ASCII_SMS_LENGTH
 
         if len(message) <= max_length:
-            # Short message, send it as a single SMS
             return await self.send_sms(phone_number, message)
 
         # Split the message into parts
@@ -768,14 +831,26 @@ class GSMModem:
         for i in range(0, len(message), max_length):
             parts.append(message[i : i + max_length])
 
-        logger.info(f"Splitting message into {len(parts)} parts")
+        logger.info(f"Splitting message into {len(parts)} parts (unicode={is_unicode})")
 
-        # Send each part
+        # Bug fix: Use a proper retry mechanism for failed parts
         success = True
+        max_retries = 2
+
         for i, part in enumerate(parts, 1):
             part_text = f"({i}/{len(parts)}) {part}"
-            if not await self.send_sms(phone_number, part_text):
-                logger.error(f"Failed to send part {i} of {len(parts)}")
+            sent = False
+
+            # Try to send it with retries
+            for attempt in range(max_retries):
+                if await self.send_sms(phone_number, part_text):
+                    sent = True
+                    break
+                logger.warning(f"Failed to send part {i}, attempt {attempt + 1}/{max_retries}")
+                await asyncio.sleep(1)  # Shorter wait before retry
+
+            if not sent:
+                logger.error(f"Failed to send part {i} of {len(parts)} after {max_retries} attempts")
                 success = False
 
         return success
