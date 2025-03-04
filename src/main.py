@@ -35,16 +35,6 @@ logging.getLogger("async_sms_reader").setLevel(logging.DEBUG)
 WAITING_FOR_NUMBER, WAITING_FOR_MESSAGE = range(2)
 
 
-async def check_access(update: Update) -> bool:
-    user = update.effective_user
-    if not user:
-        return False
-    if user.id != settings.bot.allowed_user_id:
-        await SMSBot.unauthorized_response(update)
-        return False
-    return True
-
-
 async def retry_telegram_api[ReturnType: any, **P](
     func: Callable[P, Awaitable[ReturnType]], *args: P.args, max_retries: int = 3, **kwargs: P.kwargs
 ) -> ReturnType | None:
@@ -766,6 +756,16 @@ class SMSBot:
         # Set up handlers
         self._setup_handlers()
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+
+async def check_access(update: Update) -> bool:
+    user = update.effective_user
+    if not user:
+        return False
+    if user.id != settings.bot.allowed_user_id:
+        await SMSBot.unauthorized_response(update)
+        return False
+    return True
 
 
 if __name__ == "__main__":

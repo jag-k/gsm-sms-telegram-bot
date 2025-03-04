@@ -1,11 +1,13 @@
 import datetime
 import html
+import logging
 
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, TypedDict
 
-from sms_reader.utils import logger
+
+logger = logging.getLogger(__name__)
 
 
 _QUALITY_MAX_VALUE = 31  # Maximum RSSI value

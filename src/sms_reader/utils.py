@@ -10,7 +10,7 @@ from sms_reader.models import PendingMessage, SMSMessage
 logger = logging.getLogger(__name__)
 
 
-def _parse_text_mode_response(response_text: str) -> list[dict]:
+def parse_text_mode_response(response_text: str) -> list[dict]:
     """Parse the AT+CMGL response into a list of SMS entries.
 
     :param response_text: Raw response from AT+CMGL command
@@ -41,7 +41,7 @@ def _parse_text_mode_response(response_text: str) -> list[dict]:
     return sms_entries
 
 
-def _decode_ucs2_text(text: str) -> str:
+def decode_ucs2_text(text: str) -> str:
     """Decode UCS2 (hexadecimal) text to Unicode string.
 
     :param text: Hexadecimal string to decode
@@ -56,7 +56,7 @@ def _decode_ucs2_text(text: str) -> str:
     return text
 
 
-def _parse_sms_timestamp(timestamp: str | datetime.datetime | None) -> datetime.datetime:
+def parse_sms_timestamp(timestamp: str | datetime.datetime | None) -> datetime.datetime:
     """Parse SMS timestamp to a datetime object.
 
     :param timestamp: Timestamp as a string or datetime object
@@ -104,7 +104,7 @@ def _parse_sms_timestamp(timestamp: str | datetime.datetime | None) -> datetime.
         return datetime.datetime.now()
 
 
-def _decode_pdu(sms_index: str, pdu_data: str) -> SMSMessage | None:
+def decode_pdu(sms_index: str, pdu_data: str) -> SMSMessage | None:
     """Decode PDU data of an SMS and return structured information.
 
     :param sms_index: Index of the SMS in storage
@@ -122,7 +122,7 @@ def _decode_pdu(sms_index: str, pdu_data: str) -> SMSMessage | None:
         text = sms.text
 
         # Parse timestamp to datetime
-        timestamp = _parse_sms_timestamp(sms.date)
+        timestamp = parse_sms_timestamp(sms.date)
 
         # Check if this is an alphanumeric sender ID
         is_alphanumeric = False
@@ -174,7 +174,7 @@ def _decode_pdu(sms_index: str, pdu_data: str) -> SMSMessage | None:
         return None
 
 
-def _sort_message_parts(pending: PendingMessage) -> None:
+def sort_message_parts(pending: PendingMessage) -> None:
     """Sort message parts by their order numbers."""
     try:
         pending["parts"].sort(key=lambda m: int(m.text.split(")")[0].split("/")[0].strip("(")))
@@ -182,7 +182,7 @@ def _sort_message_parts(pending: PendingMessage) -> None:
         logger.warning("Failed to sort message parts, using original order")
 
 
-def _create_merged_message(pending: PendingMessage) -> SMSMessage:
+def create_merged_message(pending: PendingMessage) -> SMSMessage:
     """Create a merged message from all parts."""
     merged_text = "".join(part.text for part in pending["parts"])
     original_message = pending["message"]
@@ -198,7 +198,7 @@ def _create_merged_message(pending: PendingMessage) -> SMSMessage:
     )
 
 
-def _check_if_last_part(pending: PendingMessage) -> bool:
+def check_if_last_part(pending: PendingMessage) -> bool:
     """Check if we've received the last part of the message."""
     try:
         for part in pending["parts"]:
