@@ -505,7 +505,6 @@ class SMSBot:
 
         return ConversationHandler.END
 
-    @logfire.instrument("Setup: Initialize Modem")
     async def _initialize_modem(self, _: Application) -> None:
         """
         Initialize and set up the GSM modem.
@@ -514,19 +513,20 @@ class SMSBot:
         """
 
         try:
-            self.modem = GSMModem(
-                port=settings.modem.modem_port,
-                baud_rate=settings.modem.baud_rate,
-                merge_messages_timeout=settings.modem.merge_messages_timeout,
-                check_interval=settings.modem.check_rate,
-            )
-            setup_success = await self.modem.setup()
+            with logfire.span("Setup: Modem"):
+                self.modem = GSMModem(
+                    port=settings.modem.modem_port,
+                    baud_rate=settings.modem.baud_rate,
+                    merge_messages_timeout=settings.modem.merge_messages_timeout,
+                    check_interval=settings.modem.check_rate,
+                )
+                setup_success = await self.modem.setup()
 
-            if not setup_success:
-                logger.error("Failed to set up GSM modem")
-                raise RuntimeError("Failed to set up GSM modem")
+                if not setup_success:
+                    logger.error("Failed to set up GSM modem")
+                    raise RuntimeError("Failed to set up GSM modem")
 
-            logger.info("GSM modem initialized successfully")
+                logger.info("GSM modem initialized successfully")
             # Start SMS monitoring in a separate task
             task = asyncio.create_task(
                 self.modem.run_sms_monitoring(
