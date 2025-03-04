@@ -4,6 +4,7 @@ import string
 
 from typing import TypedDict
 
+import logfire
 import messaging.sms
 
 from sms_reader.models import SMSMessage, UDHInfo
@@ -111,6 +112,7 @@ def parse_sms_timestamp(timestamp: str | datetime.datetime | None) -> datetime.d
         return datetime.datetime.now(datetime.UTC)
 
 
+@logfire.instrument("Decode PDU")
 def decode_pdu(sms_index: str, pdu_data: str) -> SMSMessage | None:
     """Decode PDU data of an SMS and return structured information.
 

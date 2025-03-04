@@ -11,6 +11,7 @@ license = { text = "MIT" }
 license-files = ["LICEN[CS]E*"]
 keywords = ["telegram-bot", "sms", "sms-messages", "gsm", "gsm-modem"]
 dependencies = [
+  "logfire[system-metrics]>=3.7.0",
   "pydantic>=2.10.6",
   "pydantic-extra-types[phonenumbers]>=2.10.2",
   "pydantic-settings>=2.8.1",

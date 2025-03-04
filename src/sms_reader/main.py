@@ -7,6 +7,7 @@ from asyncio import StreamReader, StreamWriter
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+import logfire
 import messaging.sms
 import serial_asyncio
 
@@ -84,6 +85,7 @@ class GSMModem:
         self._check_interval = check_interval
         self._prioritize_otp = prioritize_otp
 
+    @logfire.instrument("Setup: Connect to Modem")
     async def connect(self) -> bool:
         """Establish a connection with the modem."""
         try:
@@ -141,6 +143,7 @@ class GSMModem:
 
         return response, elapsed
 
+    @logfire.instrument("Send AT Command {command}")
     async def _send_at_command(
         self,
         command: str,
@@ -197,6 +200,7 @@ class GSMModem:
             logger.error(f"Error sending AT command {command}: {e}", exc_info=e)
             return ATResponse(raw_response="", error_message=str(e))
 
+    @logfire.instrument("Setup: Check Modem Status")
     async def check_modem_status(self) -> ModemStatus:
         """Check SIM card status, network registration, and signal strength."""
         status = ModemStatus(
@@ -226,6 +230,7 @@ class GSMModem:
         self.status = status
         return status
 
+    @logfire.instrument("Setup: Configure Modem")
     async def setup(self) -> bool:
         """Configure the modem for SMS reception with proper sender ID handling."""
         # Connect to the modem
@@ -286,6 +291,7 @@ class GSMModem:
         logger.info("Modem setup completed successfully")
         return True
 
+    @logfire.instrument("Send SMS notification {sms.sender}")
     async def _notify_single_message(self, sms: SMSMessage) -> bool:
         """Notify about a single message.
 
@@ -293,12 +299,14 @@ class GSMModem:
         :return: True if notification was sent, False otherwise
         """
         if not self.on_sms_received:
+            logger.warning("No callback function set for SMS notification")
             return False
 
         # Handle both sync and async callbacks
         callback_result = self.on_sms_received(sms)
         if asyncio.iscoroutine(callback_result):
             await callback_result
+        logger.info(f"Sent notification for SMS from {sms.sender}")
 
         # Clean up expired messages
         await self._cleanup_pending_messages()
@@ -309,52 +317,53 @@ class GSMModem:
         if not self._merge_enabled:
             return
 
-        now = now_utc()
-        # Only clean up at the interval defined by merge_timeout
-        if (now - self._last_cleanup).total_seconds() < self._merge_timeout:
-            return
+        with logfire.span("Cleanup Pending Messages"):
+            now = now_utc()
+            # Only clean up at the interval defined by merge_timeout
+            if (now - self._last_cleanup).total_seconds() < self._merge_timeout:
+                return
 
-        self._last_cleanup = now
-        logger.debug("Running pending message cleanup")
-        expired_senders = []
+            self._last_cleanup = now
+            logger.debug("Running pending message cleanup")
+            expired_senders = []
 
-        for sender, pending in self._pending_messages.items():
-            # Ensure timestamp has timezone
-            timestamp = pending.timestamp
-            if timestamp.tzinfo is None:
-                timestamp = timestamp.replace(tzinfo=datetime.UTC)
+            for sender, pending in self._pending_messages.items():
+                # Ensure timestamp has timezone
+                timestamp = pending.timestamp
+                if timestamp.tzinfo is None:
+                    timestamp = timestamp.replace(tzinfo=datetime.UTC)
 
-            time_diff = (now - timestamp).total_seconds()
+                time_diff = (now - timestamp).total_seconds()
 
-            # Check if this message has expired
-            if time_diff > self._merge_timeout:
-                logger.debug(f"Message from {sender} expired after {time_diff:.1f}s")
+                # Check if this message has expired
+                if time_diff > self._merge_timeout:
+                    logger.debug(f"Message from {sender} expired after {time_diff:.1f}s")
 
-                # Bug fix: Check for complete multipart messages before discarding
-                if pending.is_complete:
-                    # Sort and merge one final time before notification
-                    pending.merge_message()
+                    # Bug fix: Check for complete multipart messages before discarding
+                    if pending.is_complete:
+                        # Sort and merge one final time before notification
+                        pending.merge_message()
 
-                # Notify if not already notified
-                if not pending.notified:
-                    logger.debug("Notifying about expired/complete pending message")
-                    await self._notify_single_message(pending.message)
-                    pending.notified = True
+                    # Notify if not already notified
+                    if not pending.notified:
+                        logger.debug("Notifying about expired/complete pending message")
+                        await self._notify_single_message(pending.message)
+                        pending.notified = True
 
-                # Always expire the message after timeout
-                expired_senders.append(sender)
+                    # Always expire the message after timeout
+                    expired_senders.append(sender)
 
-                if pending.is_complete:
-                    logger.info(f"Completed multipart message from {sender}")
-                else:
-                    logger.warning(f"Incomplete multipart message from {sender} expired after {time_diff:.1f}s")
+                    if pending.is_complete:
+                        logger.info(f"Completed multipart message from {sender}")
+                    else:
+                        logger.warning(f"Incomplete multipart message from {sender} expired after {time_diff:.1f}s")
 
-        # Remove expired messages
-        for sender in expired_senders:
-            del self._pending_messages[sender]
+            # Remove expired messages
+            for sender in expired_senders:
+                del self._pending_messages[sender]
 
-        if expired_senders:
-            logger.info(f"Cleaned up {len(expired_senders)} expired pending messages")
+            if expired_senders:
+                logger.info(f"Cleaned up {len(expired_senders)} expired pending messages")
 
     async def _process_message__notify(self, pending: PendingMessage, key: str) -> None:
         """Notify about a message if needed.
@@ -405,6 +414,7 @@ class GSMModem:
         await self._process_message__notify(pending, key)
         return True
 
+    @logfire.instrument("Process SMS Message {sms.sender}")
     async def _process_message(self, sms: SMSMessage) -> None:
         """Process a received SMS message and handle multipart messages.
 
@@ -454,6 +464,7 @@ class GSMModem:
         # Clean up expired messages
         await self._cleanup_pending_messages()
 
+    @logfire.instrument("Read SMS: PDU Mode")
     async def read_sms_pdu(self) -> list[SMSMessage]:
         """Read all stored SMS messages in PDU mode and delete them after reading."""
         logger.debug("Reading SMS messages in PDU mode")
@@ -498,6 +509,7 @@ class GSMModem:
 
         return messages
 
+    @logfire.instrument("Read SMS: Text Mode")
     async def read_sms_text(self) -> list[SMSMessage]:
         """Read all stored SMS messages in text mode and delete them after reading."""
         logger.debug("Reading SMS messages in text mode")
@@ -549,6 +561,7 @@ class GSMModem:
 
         return messages
 
+    @logfire.instrument("Get SIM Contacts")
     async def get_sim_contacts(self) -> dict[str, str]:
         """Fetch all contacts stored on the SIM card."""
         await self._send_at_command('AT+CPBS="SM"')
@@ -570,6 +583,7 @@ class GSMModem:
         self.contacts.update(contacts)
         return contacts
 
+    @logfire.instrument("Run SMS Monitoring")
     async def run_sms_monitoring(
         self,
         callback: Callable[[SMSMessage], Any] | None = None,
@@ -662,6 +676,7 @@ class GSMModem:
 
             await asyncio.sleep(sleep_time)
 
+    @logfire.instrument("Delete All SMS")
     async def delete_all_sms(self) -> bool:
         """Delete all SMS messages from the modem."""
         response = await self._send_at_command("AT+CMGD=1,4")
@@ -769,6 +784,7 @@ class GSMModem:
             logger.error(f"Error in _send_sms_message: {e}", exc_info=e)
             return ""
 
+    @logfire.instrument("Send SMS {phone_number}: Text Mode")
     async def send_sms_text(self, phone_number: str, message: str) -> bool:
         """Send an SMS message in text mode."""
         # Switch to text mode
@@ -782,6 +798,7 @@ class GSMModem:
             logger.error(f"Error sending SMS: {e}", exc_info=e)
             return False
 
+    @logfire.instrument("Send SMS {phone_number}: PDU Mode")
     async def send_sms_pdu(self, phone_number: str, message: str) -> bool:
         """Send SMS message in PDU mode."""
         try:
@@ -806,6 +823,7 @@ class GSMModem:
             logger.error(f"Error sending SMS in PDU mode: {e}", exc_info=e)
             return False
 
+    @logfire.instrument("Send SMS {phone_number}")
     async def send_sms(self, phone_number: str, message: str) -> bool:
         """Send an SMS message using the best available method."""
         logger.info(f"Sending SMS to {phone_number}")
@@ -820,6 +838,7 @@ class GSMModem:
         # Fall back to PDU mode
         return await self.send_sms_pdu(phone_number, message)
 
+    @logfire.instrument("Send Long SMS {phone_number}")
     async def send_long_sms(self, phone_number: str, message: str) -> bool:
         """Send a long SMS message by splitting it into multiple parts if needed.
 

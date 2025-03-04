@@ -1,6 +1,7 @@
 import logging
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -66,6 +67,13 @@ class ModemSettings(BaseModel):
     check_rate: int = Field(3, description="Rate in seconds to check for new messages")
 
 
+class LogfireSettings(BaseModel):
+    """Settings for Logfire."""
+
+    token: str | None = Field(None, description="Logfire API token")
+    environment: Literal["local", "production"] = Field("local", description="Logfire environment name")
+
+
 class Settings(BaseSettings):
     """
     Settings for the SMS Telegram Bot.
@@ -83,3 +91,4 @@ class Settings(BaseSettings):
 
     bot: BotSettings = Field(default_factory=BotSettings, description="Settings for the SMS Telegram Bot")
     modem: ModemSettings = Field(default_factory=ModemSettings, description="Settings for the GSM Modem")
+    logfire: LogfireSettings = Field(default_factory=LogfireSettings, description="Settings for Logfire")

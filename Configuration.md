@@ -34,3 +34,14 @@ Settings for the GSM Modem.
 | `MODEM__DEFAULT_REGION`         | `string`  | `"US"`           | Default region code for phone numbers without country code | `"US"`           |
 | `MODEM__MERGE_MESSAGES_TIMEOUT` | `integer` | `10`             | Timeout in seconds for merging messages                    | `10`             |
 | `MODEM__CHECK_RATE`             | `integer` | `3`              | Rate in seconds to check for new messages                  | `3`              |
+
+### LogfireSettings
+
+Settings for Logfire.
+
+**Environment Prefix**: `LOGFIRE__`
+
+| Name                   | Type                        | Default   | Description              | Example   |
+|------------------------|-----------------------------|-----------|--------------------------|-----------|
+| `LOGFIRE__TOKEN`       | `string` \| `NoneType`      | `null`    | Logfire API token        | `null`    |
+| `LOGFIRE__ENVIRONMENT` | `"local"` \| `"production"` | `"local"` | Logfire environment name | `"local"` |
