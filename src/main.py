@@ -28,7 +28,7 @@ settings = Settings()
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-logging.getLogger("async_sms_reader").setLevel(logging.DEBUG)
+logging.getLogger("sms_reader").setLevel(logging.DEBUG)
 
 
 # Globals

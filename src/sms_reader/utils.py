@@ -139,17 +139,21 @@ def decode_pdu(sms_index: str, pdu_data: str) -> SMSMessage | None:
 
         # Extract UDH information for multipart messages
         udh_info = None
-        if hasattr(sms, "udh") and sms.udh and sms.udh.headers:
-            logger.debug(f"UDH Headers: {sms.udh}")
-            for ie in sms.udh.headers:
-                # Check for concatenated SMS information element (0x00 or 0x08)
-                if ie.iei in (0, 8):
-                    udh_info = {
-                        "ref_num": ie.data[0],  # Reference number
-                        "total_parts": ie.data[1],  # Total number of parts
-                        "current_part": ie.data[2],  # Current part number
-                    }
-                    break
+        if hasattr(sms, "udh") and sms.udh:
+            # Log UDH information for debugging
+            logger.debug(f"UDH: {sms.udh}")
+
+            # Check for concatenation information
+            if hasattr(sms.udh, "concat") and sms.udh.concat:
+                udh_info = {
+                    "ref_num": sms.udh.concat.ref,  # Reference number
+                    "total_parts": sms.udh.concat.cnt,  # Total number of parts
+                    "current_part": sms.udh.concat.seq,  # Current part number (sequence)
+                }
+                logger.debug(
+                    f"Found multipart SMS: part {udh_info['current_part']}/{udh_info['total_parts']}, "
+                    f"ref: {udh_info['ref_num']}"
+                )
 
         # Extract additional information from the PDU data directly
         try:
