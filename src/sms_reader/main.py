@@ -70,6 +70,11 @@ class GSMModem:
         self._sms_reader: Callable[[], Awaitable[list[SMSMessage]]] = self.read_sms_text
         self.on_sms_received: Callable[[SMSMessage], Any] | None = None
         self.contacts: dict[str, str] = {}
+        self.status: ModemStatus = ModemStatus(
+            sim_ready=False,
+            network_registered=False,
+            signal_strength=0,
+        )
 
         self._pending_messages: dict[str, PendingMessage] = {}
         self._merge_timeout = merge_messages_timeout
@@ -218,7 +223,7 @@ class GSMModem:
             match = re.search(r"\+CSQ: (\d+),", signal_response.raw_response)
             if match:
                 status.signal_strength = int(match.group(1))
-
+        self.status = status
         return status
 
     async def setup(self) -> bool:
@@ -565,45 +570,58 @@ class GSMModem:
         self.contacts.update(contacts)
         return contacts
 
-    async def start_sms_monitoring(
+    async def run_sms_monitoring(
         self,
         callback: Callable[[SMSMessage], Any] | None = None,
         interval: float | None = None,
+        lock: asyncio.Lock | None = None,
     ) -> None:
         """Start monitoring for new SMS messages.
 
         :param callback: Function to call when a new SMS is received
         :param interval: Check interval in seconds (defaults to instance setting)
+        :param lock: Optional lock to use for concurrent access
         """
         if callback:
             self.on_sms_received = callback
-
-        # Use instance default if no interval provided
-        base_interval = interval if interval is not None else self._check_interval
+        if not lock:
+            lock = asyncio.Lock()
+        if not interval:
+            interval = self._check_interval
 
         # Use an adaptive interval strategy
         # For inactive periods, the interval will gradually increase up to this maximum
-        max_inactive_interval = min(base_interval * 2, 5.0)  # Cap at 5 seconds max
+        max_inactive_interval = min(interval * 2, 5.0)  # Cap at 2x seconds max
 
         # After receiving messages, use this shorter interval for a while
         # to ensure we quickly catch all related messages (like multipart SMS)
-        active_interval = max(0.5, base_interval / 2)  # Minimum 0.5s
+        active_interval = max(0.5, interval / 2)  # Minimum 0.5s
 
         # Current interval starts at base value
-        current_interval = base_interval
+        current_interval = interval
 
         # Track message activity to adjust polling frequency
         last_message_time = now_utc()
         message_activity = False
 
-        logger.info(f"Starting SMS monitoring with base interval of {base_interval:.1f}s")
+        logger.info(f"Starting SMS monitoring with base interval of {interval:.1f}s")
         logger.info(f"Using active interval: {active_interval:.1f}s, max interval: {max_inactive_interval:.1f}s")
 
         while True:
             check_start = now_utc()
 
             # Check for new messages
-            messages = await self._sms_reader()
+            async with lock:
+                if not self.status:
+                    logger.warning("Modem not yet set up before monitoring! Running setup...")
+                    ok = await self.setup()
+                    if not ok:
+                        logger.error(f"Failed to set up modem before monitoring! Retrying after {interval:.2f}s...")
+                        await asyncio.sleep(interval)
+                        continue
+                    logger.info("Modem setup completed successfully!")
+
+                messages = await self._sms_reader()
 
             # Adjust polling interval based on activity
             if messages:
@@ -624,7 +642,7 @@ class GSMModem:
                 # gradually return to normal polling
                 if message_activity and inactive_time > ACTIVE_MODE_TIMEOUT:
                     message_activity = False
-                    current_interval = base_interval
+                    current_interval = interval
                     logger.debug("Returning to base polling interval")
                 # If we continue to see no activity for a while, gradually increase an interval
                 elif not message_activity and inactive_time > INACTIVE_MODE_THRESHOLD:

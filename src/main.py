@@ -149,30 +149,6 @@ class SMSBot:
         self.bot_data_lock = asyncio.Lock()
         self.shutdown_tasks: list[asyncio.Task] = []
 
-    async def modem_monitor_task(self) -> None:
-        """Monitor SMS messages task."""
-        logger.info("Starting SMS monitoring task")
-
-        if not self.modem:
-            logger.error("Cannot start monitoring: modem not initialized")
-            return
-
-        while True:
-            try:
-                logger.debug("Acquiring modem lock for monitoring")
-                async with self.modem_lock:
-                    if self.modem._sms_reader:
-                        logger.debug("Running SMS reader check")
-                        await self.modem._sms_reader()
-                    else:
-                        logger.error("SMS reader not configured")
-                        break
-            except Exception as e:
-                logger.error(f"Error in SMS monitoring: {e}", exc_info=e)
-
-            logger.debug("Waiting before next monitoring check")
-            await asyncio.sleep(settings.modem.check_rate)
-
     async def on_sms_received(self, sms: SMSMessage) -> None:
         """
         Callback function for when a new SMS is received.
@@ -664,6 +640,7 @@ class SMSBot:
                 port=settings.modem.modem_port,
                 baud_rate=settings.modem.baud_rate,
                 merge_messages_timeout=settings.modem.merge_messages_timeout,
+                check_interval=settings.modem.check_rate,
             )
             setup_success = await self.modem.setup()
 
@@ -672,10 +649,13 @@ class SMSBot:
                 raise RuntimeError("Failed to set up GSM modem")
 
             logger.info("GSM modem initialized successfully")
-            # Set callback for SMS reception
-            self.modem.on_sms_received = self.on_sms_received
             # Start SMS monitoring in a separate task
-            task = asyncio.create_task(self.modem_monitor_task())
+            task = asyncio.create_task(
+                self.modem.run_sms_monitoring(
+                    callback=self.on_sms_received,
+                    lock=self.modem_lock,
+                )
+            )
             self.shutdown_tasks.append(task)
 
         except Exception as e:
