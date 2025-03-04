@@ -163,7 +163,8 @@ class SMSBot:
         self.shutdown_tasks: list[asyncio.Task] = []
 
     async def modem_monitor_task(self) -> None:
-        """Task to monitor SMS messages, with proper locking."""
+        """Monitor SMS messages task."""
+        logger.info("Starting SMS monitoring task")
 
         if not self.modem:
             logger.error("Cannot start monitoring: modem not initialized")
@@ -171,8 +172,10 @@ class SMSBot:
 
         while True:
             try:
+                logger.debug("Acquiring modem lock for monitoring")
                 async with self.modem_lock:
                     if self.modem._sms_reader:
+                        logger.debug("Running SMS reader check")
                         await self.modem._sms_reader()
                     else:
                         logger.error("SMS reader not configured")
@@ -180,7 +183,7 @@ class SMSBot:
             except Exception as e:
                 logger.error(f"Error in SMS monitoring: {e}", exc_info=e)
 
-            # Wait before next check
+            logger.debug("Waiting before next monitoring check")
             await asyncio.sleep(10)
 
     async def on_sms_received(self, sms: SMSMessage) -> None:
@@ -292,11 +295,14 @@ class SMSBot:
         """
         user = update.effective_user
         if not user:
+            logger.warning("No user information available in the update")
             return False
         if user.id != settings.bot.allowed_user_id:
             await self.unauthorized_response(update)
+            logger.warning(f"Unauthorized access attempt by user {user.id} ({user.username})")
             return False
         if not self.modem:
+            logger.error("GSM modem is not initialized!")
             msg = update.message
             if msg:
                 await msg.reply_text("GSM modem is not initialized.")
@@ -341,119 +347,104 @@ class SMSBot:
         await update.message.reply_text(response, parse_mode=ParseMode.HTML)
 
     async def cmd_clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """
-        Handle the /clear command: clear message history.
+        """Handle the /clear command."""
+        logger.info("Processing /clear command")
 
-        :param update: The update containing the command.
-        :param context: The context for this handler.
-        """
         if not await self._check_access(update):
             return
         if not update.message or not update.effective_chat:
+            logger.error("Invalid update object in clear command")
             return
 
+        logger.debug("Clearing message storage")
         await self.clear_storage()
         await update.message.reply_text("🧹 Message history cleared!")
+        logger.info("Message history cleared successfully")
 
     async def cmd_send(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """
-        Handle the /send command with its various modes.
+        """Handle the /send command."""
+        logger.info("Processing /send command")
 
-        :param update: The update containing the command.
-        :param context: The context for this handler.
-        :return: The next conversation state.
-        """
-        # Check if this is the allowed user
         if not await self._check_access(update):
             return ConversationHandler.END
         if not update.message or not update.effective_chat or context.user_data is None:
+            logger.error("Invalid update object or context in send command")
             return ConversationHandler.END
 
-        # Add the cancel command to the menu
+        logger.debug("Setting bot commands with cancel option")
         await self.set_bot_commands(update.effective_chat.id, include_cancel=True)
 
-        # Get command arguments
         args = context.args
+        logger.debug(f"Send command received with {len(args) if args else 0} arguments")
 
         if not args:
-            # No arguments: ask for a phone number
+            logger.debug("No arguments provided, requesting phone number")
             await update.message.reply_text("Please provide a phone number or forward a contact to send an SMS to.")
             return WAITING_FOR_NUMBER
 
         elif len(args) == 1:
-            # One argument: phone number provided, ask for a message
             phone_number = args[0]
-
-            # Store the phone number in user_data
+            logger.debug(f"Phone number provided: {phone_number}, waiting for message")
             context.user_data["send_to_number"] = phone_number
-
             await update.message.reply_text(f"Please enter the message to send to {phone_number}:")
             return WAITING_FOR_MESSAGE
 
         else:
-            # Multiple arguments: phone number and message provided
             phone_number = args[0]
             message_text = " ".join(args[1:])
+            logger.info(f"Full SMS command received for {phone_number}")
 
-            # Send the SMS directly
             result = await self.send_sms(update, phone_number, message_text)
-
-            # Remove the cancel command after sending
+            logger.debug("Removing cancel command after send operation")
             await self.set_bot_commands(update.effective_chat.id, include_cancel=False)
 
             return result
 
     async def cancel_send(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """
-        Cancel the sending conversation.
+        """Cancel the sending conversation."""
+        logger.info("Processing send cancellation")
 
-        :param update: The update containing the cancel command.
-        :param context: The context for this handler.
-        :return: ConversationHandler.END to end the conversation.
-        """
         if not update.message or not update.effective_chat or context.user_data is None:
+            logger.error("Invalid update object in cancel operation")
             return ConversationHandler.END
 
         await update.message.reply_text("SMS sending cancelled.")
 
-        # Clear any stored data
         if "send_to_number" in context.user_data:
+            logger.debug("Clearing stored phone number from user data")
             del context.user_data["send_to_number"]
 
-        # Remove cancel command from menu
+        logger.debug("Removing cancel command from menu")
         await self.set_bot_commands(update.effective_chat.id, include_cancel=False)
 
+        logger.info("Send operation cancelled successfully")
         return ConversationHandler.END
 
     @staticmethod
     async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """
-        Handle a contact message during the sending conversation.
+        """Handle a contact message during sending conversation."""
+        logger.info("Processing contact message")
 
-        :param update: The update containing the contact.
-        :param context: The context for this handler.
-        :return: The next conversation state.
-        """
         if not update.message or not update.message.contact or context.user_data is None:
+            logger.error("Invalid contact message received")
             return ConversationHandler.END
 
         contact = update.message.contact
-
         if not contact.phone_number:
+            logger.warning("Contact has no phone number")
             await update.message.reply_text("This contact doesn't have a phone number.")
             return WAITING_FOR_NUMBER
 
-        # Clean and format the phone number
         phone_number = format_phone_number(contact.phone_number)
+        logger.debug(f"Formatted phone number: {phone_number}")
 
-        # Store the phone number in user_data
         context.user_data["send_to_number"] = phone_number
 
-        # Ask for the message
         name = contact.first_name
         if contact.last_name:
             name += f" {contact.last_name}"
 
+        logger.info(f"Contact processed: {name} ({phone_number})")
         await update.message.reply_text(f"Please enter the message to send to {name} ({phone_number}):")
         return WAITING_FOR_MESSAGE
 
@@ -550,61 +541,47 @@ class SMSBot:
         return await self.send_sms(update, phone_number, message_text)
 
     async def handle_sms_reply(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """
-        Handle replies to SMS messages.
+        """Handle replies to SMS messages."""
+        logger.info("Processing SMS reply")
 
-        :param update: The update containing the reply.
-        :param context: The context for this handler.
-        """
-        # Check if this is the allowed user
         if not await self._check_access(update):
             return
         if not update.message:
+            logger.error("No message in update for SMS reply")
             return
 
         # Get the original message that was replied to
         replied_to = update.message.reply_to_message
-
         if not replied_to or not replied_to.text:
-            await update.message.reply_text("Cannot determine which SMS you're replying to.")
+            logger.warning("Invalid reply: no original message found")
+            await update.message.reply_text("Please reply to an SMS message.")
             return
 
-        # Extract the sender from the message
+        # Extract sender from the original message
         sender = extract_sender_from_message(replied_to.text)
-
         if not sender:
-            await update.message.reply_text("Cannot determine the SMS sender to reply to.")
+            logger.warning("Could not extract sender from original message")
+            await update.message.reply_text("Could not determine the recipient from the original message.")
             return
 
-        # Check if this is an alphanumeric sender (can't reply)
-        if any(c.isalpha() for c in sender):
-            await update.message.reply_text(
-                f"Cannot reply to {sender} as it appears to be an alphanumeric sender ID "
-                "(like a bank or service notification)."
-            )
-            return
+        logger.info(f"Processing reply to sender: {sender}")
+        await self.reply_to_sms(update, sender)
 
-        # Format the phone number and send the SMS
-        await self.send_reply_sms(update, sender)
-
-    async def send_reply_sms(self, update: Update, sender: str) -> None:
-        """
-        Send a reply SMS to the specified sender.
-
-        :param update: The update containing the reply.
-        :param sender: The sender to reply to.
-        """
-        # Format the phone number
+    async def reply_to_sms(self, update: Update, sender: str) -> None:
+        """Handle replying to a specific sender."""
+        logger.debug(f"Formatting phone number for sender: {sender}")
         phone_number = format_phone_number(sender)
 
-        # Get the reply text
         if not update.message:
-            return
-        reply_text = update.message.text
-        if not reply_text:
+            logger.error("No message in update for SMS reply")
             return
 
-        # Send the SMS
+        reply_text = update.message.text
+        if not reply_text:
+            logger.warning("Empty reply text")
+            return
+
+        logger.info(f"Sending reply SMS to {phone_number}")
         await self.send_sms(update, phone_number, reply_text)
 
     async def send_sms(self, update: Update, phone_number: str, message_text: str) -> int:

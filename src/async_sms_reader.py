@@ -321,6 +321,44 @@ class PendingMessage(TypedDict):
     message: SMSMessage
     timestamp: datetime.datetime
     parts: list[SMSMessage]
+    notified: bool  # Track if we've notified about this message
+
+
+def _sort_message_parts(pending: PendingMessage) -> None:
+    """Sort message parts by their order numbers."""
+    try:
+        pending["parts"].sort(key=lambda m: int(m.text.split(")")[0].split("/")[0].strip("(")))
+    except (ValueError, IndexError):
+        logger.warning("Failed to sort message parts, using original order")
+
+
+def _create_merged_message(pending: PendingMessage) -> SMSMessage:
+    """Create a merged message from all parts."""
+    merged_text = "".join(part.text for part in pending["parts"])
+    original_message = pending["message"]
+
+    return SMSMessage(
+        index=f"{original_message.index}_merged_{len(pending['parts'])}",
+        sender=original_message.sender,
+        clean_sender=original_message.clean_sender,
+        text=merged_text,
+        timestamp=original_message.timestamp,
+        is_alphanumeric=original_message.is_alphanumeric,
+        sender_type=original_message.sender_type,
+    )
+
+
+def _check_if_last_part(pending: PendingMessage) -> bool:
+    """Check if we've received the last part of the message."""
+    try:
+        for part in pending["parts"]:
+            if "(" in part.text and "/" in part.text and ")" in part.text:
+                current, total = map(int, part.text.split(")")[0].strip("(").split("/"))
+                if current == total and len(pending["parts"]) >= total:
+                    return True
+    except (ValueError, IndexError):
+        logger.debug("Failed to parse message part numbers")
+    return False
 
 
 class GSMModem:
@@ -358,8 +396,11 @@ class GSMModem:
 
         :param sms: The received SMS message
         """
+        logger.debug(f"Processing SMS from {sms.sender}")
+
         # Skip merging if disabled
         if not self._merge_enabled:
+            logger.debug("Message merging disabled, sending directly to callback")
             if self.on_sms_received:
                 callback_result = self.on_sms_received(sms)
                 if asyncio.iscoroutine(callback_result):
@@ -367,25 +408,36 @@ class GSMModem:
             return
 
         # Try to merge with pending messages
+        logger.debug("Attempting to merge message")
         merged = await self._try_merge_message(sms)
 
-        # If not merged, this is a new message sequence
-        if not merged:
+        # If not merged and not alphanumeric, store as a potential first part
+        if not merged and not sms.is_alphanumeric:
+            logger.debug(f"Message not merged, storing as potential first part from {sms.sender}")
             # Clean up old pending messages first
-            self._cleanup_pending_messages()
+            await self._cleanup_pending_messages()
 
             # Store as a potential first part of a multipart message
-            if not sms.is_alphanumeric:  # Only track non-alphanumeric senders
-                self._pending_messages[sms.sender] = {
-                    "message": sms,
-                    "timestamp": datetime.datetime.now(datetime.UTC),
-                    "parts": [sms],
-                }
+            self._pending_messages[sms.sender] = {
+                "message": sms,
+                "timestamp": datetime.datetime.now(datetime.UTC),
+                "parts": [sms],
+                "notified": False,  # Track if we've notified about this message
+            }
 
-            # Notify the callback
+            # Only notify if it is likely a single message
+            if len(sms.text) < ASCII_SMS_LENGTH:
+                logger.debug("Message appears to be single part, notifying callback")
+                if self.on_sms_received:
+                    callback_result = self.on_sms_received(sms)
+                    if asyncio.iscoroutine(callback_result):
+                        await callback_result
+                    self._pending_messages[sms.sender]["notified"] = True
+        elif not merged:
+            # For alphanumeric senders or when merging failed, notify immediately
+            logger.debug("Sending a non-mergeable message directly to callback")
             if self.on_sms_received:
                 callback_result = self.on_sms_received(sms)
-                # if the callback is async, wait for it to complete
                 if asyncio.iscoroutine(callback_result):
                     await callback_result
 
@@ -395,66 +447,59 @@ class GSMModem:
         :param sms: The SMS message to process
         :return: True if the message was merged, False otherwise
         """
-        # Skip if merging is disabled
-        if not self._merge_enabled:
-            return False
-
-        # Skip alphanumeric senders (like banks, services)
-        if sms.is_alphanumeric:
-            return False
-
-        # Check if we have pending messages from this sender
-        if sms.sender not in self._pending_messages:
+        if not self._can_merge_message(sms):
             return False
 
         pending = self._pending_messages[sms.sender]
+        if not self._is_within_timeout(pending):
+            return False
 
-        # Check if the message is within the merge timeout
+        # Add new part and update timestamp
+        pending["parts"].append(sms)
+        pending["timestamp"] = datetime.datetime.now(datetime.UTC)
+
+        _sort_message_parts(pending)
+        merged_sms = _create_merged_message(pending)
+        pending["message"] = merged_sms
+
+        is_last_part = _check_if_last_part(pending)
+        await self._notify_if_needed(pending, is_last_part)
+
+        return True
+
+    def _can_merge_message(self, sms: SMSMessage) -> bool:
+        """Check if the message can be merged."""
+        return self._merge_enabled and not sms.is_alphanumeric and sms.sender in self._pending_messages
+
+    def _is_within_timeout(self, pending: PendingMessage) -> bool:
+        """Check if the pending message is within the merge timeout."""
         now = datetime.datetime.now(datetime.UTC)
         timestamp = pending["timestamp"]
         if timestamp.tzinfo is None:
             timestamp = timestamp.replace(tzinfo=datetime.UTC)
+
         time_diff = (now - timestamp).total_seconds()
 
         if time_diff > self._merge_timeout:
-            # Too old, don't merge
+            logger.debug(f"Message too old to merge (diff: {time_diff}s > timeout: {self._merge_timeout}s)")
             return False
-
-        # Merge the message
-        original_message = pending["message"]
-
-        # Add this part to the part list
-        pending["parts"].append(sms)
-
-        # Update the timestamp
-        pending["timestamp"] = now
-
-        # Create a merged message
-        merged_text = "".join(part.text for part in pending["parts"])
-
-        merged_sms = SMSMessage(
-            index=f"{original_message.index}_merged_{len(pending['parts'])}",
-            sender=original_message.sender,
-            clean_sender=original_message.clean_sender,
-            text=merged_text,
-            timestamp=original_message.timestamp,  # Keep the original timestamp
-            is_alphanumeric=original_message.is_alphanumeric,
-            sender_type=original_message.sender_type,
-        )
-
-        # Update the message in the pending dictionary
-        pending["message"] = merged_sms
-
-        # Notify the callback with the merged message
-        if self.on_sms_received:
-            callback_result = self.on_sms_received(merged_sms)
-            # if the callback is async, convert to task to avoid waiting
-            if asyncio.iscoroutine(callback_result):
-                await callback_result
-
         return True
 
-    def _cleanup_pending_messages(self) -> None:
+    async def _notify_if_needed(self, pending: PendingMessage, is_last_part: bool) -> None:
+        """Notify callback if needed and handle cleanup."""
+        if not pending.get("notified", False) or is_last_part:
+            if self.on_sms_received:
+                logger.debug("Notifying callback about merged message")
+                callback_result = self.on_sms_received(pending["message"])
+                if asyncio.iscoroutine(callback_result):
+                    await callback_result
+                pending["notified"] = True
+
+                if is_last_part:
+                    logger.debug("Last part received, cleaning up pending message")
+                    del self._pending_messages[pending["message"].sender]
+
+    async def _cleanup_pending_messages(self) -> None:
         """Clean up old pending messages that are beyond the merge timeout."""
         # Skip if merging is disabled
         if not self._merge_enabled:
@@ -462,11 +507,13 @@ class GSMModem:
 
         now = datetime.datetime.now(datetime.UTC)
 
-        # Only clean up every minute to avoid unnecessary processing
-        if (now - self._last_cleanup).total_seconds() < self._merge_timeout:
+        # Only clean up every merge_timeout/2 seconds to balance between
+        # responsiveness and performance
+        if (now - self._last_cleanup).total_seconds() < (self._merge_timeout / 2):
             return
 
         self._last_cleanup = now
+        logger.debug("Cleaning up pending messages")
 
         # Find expired messages
         expired_senders = []
@@ -475,12 +522,24 @@ class GSMModem:
             if timestamp.tzinfo is None:
                 timestamp = timestamp.replace(tzinfo=datetime.UTC)
             time_diff = (now - timestamp).total_seconds()
+
             if time_diff > self._merge_timeout:
+                logger.debug(f"Message from {sender} expired after {time_diff}s")
                 expired_senders.append(sender)
+
+                # If we haven't notified about this message yet, do it now
+                if not pending.get("notified", False) and self.on_sms_received:
+                    logger.debug("Notifying about expired pending message")
+                    callback_result = self.on_sms_received(pending["message"])
+                    if asyncio.iscoroutine(callback_result):
+                        await callback_result
 
         # Remove expired messages
         for sender in expired_senders:
             del self._pending_messages[sender]
+
+        if expired_senders:
+            logger.info(f"Cleaned up {len(expired_senders)} expired pending messages")
 
     async def connect(self) -> bool:
         """Establish a connection with the modem.
@@ -488,6 +547,7 @@ class GSMModem:
         :return: True if the connection was successful, False otherwise
         """
         try:
+            # noinspection PyAttributeOutsideInit
             self._reader, self._writer = await serial_asyncio.open_serial_connection(
                 url=self.port,
                 baudrate=self.baud_rate,
@@ -626,46 +686,62 @@ class GSMModem:
 
         :return: List of decoded SMS messages
         """
+        logger.debug("Reading SMS messages in PDU mode")
         messages: list[SMSMessage] = []
-        response = await self._send_at_command("AT+CMGL=4")  # 4 = all messages
 
-        if not response.success or "+CMGL:" not in response.raw_response:
-            return messages
+        try:
+            # List all messages
+            response = await self._send_at_command("AT+CMGL=4")  # "ALL" messages
+            if not response.success:
+                logger.error("Failed to list SMS messages in PDU mode")
+                return messages
 
-        # Parse the response into lines
-        lines = response.raw_response.strip().split("\n")
-        i = 0
+            lines = response.raw_response.split("\n")
+            i = 0
+            while i < len(lines):
+                line = lines[i].strip()
+                if not line.startswith("+CMGL:"):
+                    i += 1
+                    continue
 
-        while i < len(lines):
-            if not lines[i].startswith("+CMGL:"):
-                i += 1
-                continue
+                try:
+                    # Parse index and length
+                    sms_index = line.split(",")[0].split(":")[1].strip()
+                    logger.debug(f"Processing PDU message at index {sms_index}")
 
-            # Get the message index
-            parts = lines[i].split(",")
-            sms_index = parts[0].split(":")[1].strip()
+                    # Get PDU data from next line
+                    pdu_data = lines[i + 1].strip()
+                    if not pdu_data:
+                        logger.warning(f"Empty PDU data for message {sms_index}")
+                        i += 2
+                        continue
 
-            # Next line contains PDU data
-            if i + 1 >= len(lines):
-                i += 1
-                continue
+                    # Decode PDU
+                    sms_info = _decode_pdu(sms_index, pdu_data)
+                    if not sms_info:
+                        logger.warning(f"Failed to decode PDU message {sms_index}")
+                        i += 2
+                        continue
 
-            pdu_data = lines[i + 1].strip()
-            sms_info = _decode_pdu(sms_index, pdu_data)
+                    logger.debug(f"Successfully decoded PDU message from {sms_info.sender}")
+                    messages.append(sms_info)
+                    await self._process_and_notify(sms_info)
 
-            if sms_info:
-                messages.append(sms_info)
+                    # Delete the message after processing
+                    logger.debug(f"Deleting processed message {sms_index}")
+                    delete_response = await self._send_at_command(f"AT+CMGD={sms_index}")
+                    if not delete_response.success:
+                        logger.warning(f"Failed to delete SMS message {sms_index}")
 
-                # Process and notify about the message
-                await self._process_and_notify(sms_info)
+                except Exception as e:
+                    logger.error(f"Error processing PDU message: {e}", exc_info=e)
 
-                # Delete the message after processing
-                delete_response = await self._send_at_command(f"AT+CMGD={sms_index}")
-                if not delete_response.success:
-                    logger.warning(f"Failed to delete SMS message {sms_index}")
+                i += 2
 
-            i += 2
+        except Exception as e:
+            logger.error(f"Error reading PDU messages: {e}", exc_info=e)
 
+        logger.info(f"Read {len(messages)} messages in PDU mode")
         return messages
 
     async def read_sms_text(self) -> list[SMSMessage]:
@@ -673,21 +749,37 @@ class GSMModem:
 
         :return: List of decoded SMS messages
         """
+        logger.debug("Reading SMS messages in text mode")
         messages: list[SMSMessage] = []
-        response = await self._send_at_command('AT+CMGL="ALL"')
 
-        if not response.success or "+CMGL:" not in response.raw_response:
-            return messages
+        try:
+            response = await self._send_at_command('AT+CMGL="ALL"')
+            if not response.success:
+                logger.error("Failed to list SMS messages in text mode")
+                return messages
 
-        # Parse the response into entries
-        sms_entries = _parse_text_mode_response(response.raw_response)
+            if "+CMGL:" not in response.raw_response:
+                logger.debug("No messages found in text mode")
+                return messages
 
-        # Process each entry
-        for entry in sms_entries:
-            sms_message = await self._process_text_mode_entry(entry)
-            if sms_message:
-                messages.append(sms_message)
+            # Parse the response into entries
+            sms_entries = _parse_text_mode_response(response.raw_response)
+            logger.debug(f"Found {len(sms_entries)} messages in text mode")
 
+            # Process each entry
+            for entry in sms_entries:
+                try:
+                    sms_message = await self._process_text_mode_entry(entry)
+                    if sms_message:
+                        logger.debug(f"Successfully processed message from {sms_message.sender}")
+                        messages.append(sms_message)
+                except Exception as e:
+                    logger.error(f"Error processing text mode entry: {e}", exc_info=e)
+
+        except Exception as e:
+            logger.error(f"Error reading text mode messages: {e}", exc_info=e)
+
+        logger.info(f"Read {len(messages)} messages in text mode")
         return messages
 
     async def _process_text_mode_entry(self, entry: dict) -> SMSMessage | None:
@@ -696,52 +788,62 @@ class GSMModem:
         :param entry: Dictionary with header and text fields
         :return: Processed SMS message or None if processing failed
         """
-        # Extract information from the header
-        header = entry["header"]
-        text = entry["text"]
+        try:
+            # Extract information from the header
+            header = entry["header"]
+            text = entry["text"]
 
-        # Use the precompiled regex to extract all parameters
-        header_match = SMS_HEADER_REGEX.match(header)
+            # Use the precompiled regex to extract all parameters
+            header_match = SMS_HEADER_REGEX.match(header)
 
-        if not header_match:
+            if not header_match:
+                logger.warning(f"Failed to parse SMS header: {header}")
+                return None
+
+            sms_index = header_match.group("id")
+            sender = header_match.group("sender")
+            timestamp_str = header_match.group("timestamp")
+
+            logger.debug(f"Processing text mode message {sms_index} from {sender}")
+
+            # If the text is in hexadecimal format (UCS2), decode it
+            decoded_text = _decode_ucs2_text(text)
+
+            # Parse timestamp
+            timestamp = _parse_sms_timestamp(timestamp_str)
+
+            # Check if this is an alphanumeric sender ID
+            is_alphanumeric = sender and any(c.isalpha() for c in sender)
+            clean_sender = sender or "Unknown"
+
+            if is_alphanumeric and any(not c.isalnum() for c in clean_sender):
+                clean_sender = "".join(c for c in clean_sender if c.isalnum())
+                logger.debug(f"Cleaned alphanumeric sender ID: {clean_sender}")
+
+            # Create SMS info structure
+            sms_message = SMSMessage(
+                index=sms_index,
+                sender=sender or "Unknown",
+                clean_sender=clean_sender,
+                text=decoded_text,
+                timestamp=timestamp,
+                is_alphanumeric=bool(is_alphanumeric),
+            )
+
+            # Process and notify about the message
+            await self._process_and_notify(sms_message)
+
+            # Delete the message after processing
+            logger.debug(f"Deleting processed message {sms_index}")
+            delete_response = await self._send_at_command(f"AT+CMGD={sms_index}")
+            if not delete_response.success:
+                logger.warning(f"Failed to delete SMS message {sms_index}")
+
+            return sms_message
+
+        except Exception as e:
+            logger.error(f"Error processing text mode entry: {e}", exc_info=e)
             return None
-
-        sms_index = header_match.group("id")
-        sender = header_match.group("sender")
-        timestamp_str = header_match.group("timestamp")
-
-        # If the text is in hexadecimal format (UCS2), decode it
-        decoded_text = _decode_ucs2_text(text)
-
-        # Parse timestamp
-        timestamp = _parse_sms_timestamp(timestamp_str)
-
-        # Check if this is an alphanumeric sender ID
-        is_alphanumeric = sender and any(c.isalpha() for c in sender)
-        clean_sender = sender or "Unknown"
-
-        if is_alphanumeric and any(not c.isalnum() for c in clean_sender):
-            clean_sender = "".join(c for c in clean_sender if c.isalnum())
-
-        # Create SMS info structure
-        sms_message = SMSMessage(
-            index=sms_index,
-            sender=sender or "Unknown",
-            clean_sender=clean_sender,
-            text=decoded_text,
-            timestamp=timestamp,
-            is_alphanumeric=bool(is_alphanumeric),
-        )
-
-        # Process and notify about the message
-        await self._process_and_notify(sms_message)
-
-        # Delete the message after processing
-        delete_response = await self._send_at_command(f"AT+CMGD={sms_index}")
-        if not delete_response.success:
-            logger.warning(f"Failed to delete SMS message {sms_index}")
-
-        return sms_message
 
     async def get_sim_contacts(self) -> dict[str, str]:
         """Fetch all contacts stored on the SIM card.
@@ -913,15 +1015,25 @@ class GSMModem:
         :param message: Message text to send
         :return: True if a message was sent successfully, False otherwise
         """
+        logger.info(f"Sending SMS to {phone_number}")
+
         # Try text mode first (more reliable)
         try:
+            logger.debug("Attempting to send SMS in text mode")
             if await self.send_sms_text(phone_number, message):
+                logger.info("SMS sent successfully in text mode")
                 return True
         except Exception as e:
             logger.warning(f"Failed to send SMS in text mode, falling back to PDU mode: {e}")
 
         # Fall back to PDU mode
-        return await self.send_sms_pdu(phone_number, message)
+        logger.debug("Attempting to send SMS in PDU mode")
+        success = await self.send_sms_pdu(phone_number, message)
+        if success:
+            logger.info("SMS sent successfully in PDU mode")
+        else:
+            logger.error("Failed to send SMS in both text and PDU modes")
+        return success
 
     async def send_long_sms(self, phone_number: str, message: str) -> bool:
         """Send a long SMS message by splitting it into multiple parts if needed.
