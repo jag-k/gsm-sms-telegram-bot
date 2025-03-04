@@ -125,6 +125,7 @@ class PendingMessage(TypedDict):
     timestamp: datetime.datetime
     parts: list[SMSMessage]
     notified: bool  # Track if we've notified about this message
+    expected_parts: int | None  # Number of expected parts, if known
 
 
 @dataclass

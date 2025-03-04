@@ -209,3 +209,16 @@ def check_if_last_part(pending: PendingMessage) -> bool:
     except (ValueError, IndexError):
         logger.debug("Failed to parse message part numbers")
     return False
+
+
+def extract_part_info(text: str) -> tuple[int, int] | None:
+    """Extract part number and total parts from the message text.
+    Returns (current_part, total_parts) or None if not found."""
+    try:
+        if "(" in text and "/" in text and ")" in text:
+            part_str = text.split(")")[0].strip("(")
+            current, total = map(int, part_str.split("/"))
+            return current, total
+    except (ValueError, IndexError):
+        pass
+    return None

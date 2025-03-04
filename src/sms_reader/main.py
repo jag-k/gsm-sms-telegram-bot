@@ -18,6 +18,7 @@ from sms_reader.utils import (
     create_merged_message,
     decode_pdu,
     decode_ucs2_text,
+    extract_part_info,
     parse_sms_timestamp,
     parse_text_mode_response,
     sort_message_parts,
@@ -154,6 +155,72 @@ class GSMModem:
         if expired_senders:
             logger.info(f"Cleaned up {len(expired_senders)} expired pending messages")
 
+    async def _notify_single_message(self, sms: SMSMessage) -> None:
+        """Notify about a single message."""
+        if self.on_sms_received:
+            callback_result = self.on_sms_received(sms)
+            if asyncio.iscoroutine(callback_result):
+                await callback_result
+
+    async def _check_and_merge(self, sender: str) -> None:
+        """Check if we have all parts and can merge the message."""
+        pending = self._pending_messages[sender]
+
+        # Sort parts by text content
+        parts = pending["parts"]
+        parts.sort(key=lambda m: len(m.text))  # Sort by length as a fallback
+
+        # Merge texts
+        merged_text = "".join(part.text for part in parts)
+
+        # Create a merged message
+        merged_sms = SMSMessage(
+            index=f"{pending['message'].index}_merged_{len(parts)}",
+            sender=sender,
+            clean_sender=pending["message"].clean_sender,
+            text=merged_text,
+            timestamp=pending["message"].timestamp,
+            is_alphanumeric=pending["message"].is_alphanumeric,
+            sender_type=pending["message"].sender_type,
+        )
+
+        pending["message"] = merged_sms
+
+        # For messages without part information, notify on the first merge
+        # and let the timeout mechanism handle cleanup
+        if not pending["expected_parts"] and not pending["notified"]:
+            logger.debug(f"Notifying about merged message from {sender} with {len(parts)} parts")
+            if self.on_sms_received:
+                callback_result = self.on_sms_received(merged_sms)
+                if asyncio.iscoroutine(callback_result):
+                    await callback_result
+                pending["notified"] = True
+
+    async def _handle_message_part(self, sms: SMSMessage, part_info: tuple[int, int] | None) -> None:
+        """Handle a message part, either merging it or storing for later merge."""
+        sender = sms.sender
+
+        # Initialize pending entry if needed
+        if sender not in self._pending_messages:
+            self._pending_messages[sender] = {
+                "message": sms,
+                "timestamp": datetime.datetime.now(datetime.UTC),
+                "parts": [],
+                "notified": False,
+                "expected_parts": part_info[1] if part_info else None,
+            }
+
+        pending = self._pending_messages[sender]
+        pending["parts"].append(sms)
+        pending["timestamp"] = datetime.datetime.now(datetime.UTC)
+
+        # Update the expected part count if we have new information
+        if part_info and not pending["expected_parts"]:
+            pending["expected_parts"] = part_info[1]
+
+        # Check if we should merge and notify
+        await self._check_and_merge(sender)
+
     async def _process_and_notify(self, sms: SMSMessage) -> None:
         """Process a received SMS message and notify the callback if needed.
 
@@ -166,46 +233,20 @@ class GSMModem:
 
         # Skip merging if disabled
         if not self._merge_enabled:
-            logger.debug("Message merging disabled, sending directly to callback")
-            if self.on_sms_received:
-                callback_result = self.on_sms_received(sms)
-                if asyncio.iscoroutine(callback_result):
-                    await callback_result
+            await self._notify_single_message(sms)
             return
 
-        # Try to merge with pending messages
-        logger.debug("Attempting to merge message")
-        merged = await self._try_merge_message(sms)
+        # Extract part information if present
+        part_info = extract_part_info(sms.text)
 
-        # If not merged and not alphanumeric, store as a potential first part
-        if not merged and not sms.is_alphanumeric:
-            logger.debug(f"Message not merged, storing as potential first part from {sms.sender}")
-            # Clean up old pending messages first
-            await self._cleanup_pending_messages()
+        # If no part information and message is short, treat as a single message
+        if not part_info and len(sms.text) < ASCII_SMS_LENGTH:
+            await self._notify_single_message(sms)
+            return
 
-            # Store as a potential first part of a multipart message
-            self._pending_messages[sms.sender] = {
-                "message": sms,
-                "timestamp": datetime.datetime.now(datetime.UTC),
-                "parts": [sms],
-                "notified": False,  # Track if we've notified about this message
-            }
-
-            # Only notify if it is likely a single message
-            if len(sms.text) < ASCII_SMS_LENGTH:
-                logger.debug("Message appears to be single part, notifying callback")
-                if self.on_sms_received:
-                    callback_result = self.on_sms_received(sms)
-                    if asyncio.iscoroutine(callback_result):
-                        await callback_result
-                    self._pending_messages[sms.sender]["notified"] = True
-        elif not merged:
-            # For alphanumeric senders or when merging failed, notify immediately
-            logger.debug("Sending a non-mergeable message directly to callback")
-            if self.on_sms_received:
-                callback_result = self.on_sms_received(sms)
-                if asyncio.iscoroutine(callback_result):
-                    await callback_result
+        # Try to merge or store the message
+        await self._cleanup_pending_messages()
+        await self._handle_message_part(sms, part_info)
 
     async def connect(self) -> bool:
         """Establish a connection with the modem.
