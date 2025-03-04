@@ -4,8 +4,6 @@ import html
 import logging
 import re
 import string
-import time
-import zoneinfo
 
 from asyncio import StreamReader, StreamWriter
 from collections.abc import Awaitable, Callable
@@ -127,8 +125,8 @@ class SMSMessage:
         }
 
     def to_html(self) -> str:
-        timezone_name = time.tzname[0]  # Get the system timezone name string
-        tz_object = zoneinfo.ZoneInfo(timezone_name)  # Create `tzinfo` object from name
+        # Get system timezone
+        tz_object = datetime.datetime.now().astimezone().tzinfo
         ts = self.timestamp.astimezone(tz_object)
         return (
             f"<b>From:</b> {self.sender}\n"
