@@ -1,13 +1,11 @@
 import datetime
 import html
-import logging
 
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
-
-logger = logging.getLogger(__name__)
+import logfire
 
 
 _QUALITY_MAX_VALUE = 31  # Maximum RSSI value
@@ -107,7 +105,7 @@ class SMSMessage:
                 timestamp = timestamp.replace(tzinfo=datetime.UTC)
             data["timestamp"] = timestamp
         else:
-            logger.debug(f"Timestamp is None! {data=}")
+            logfire.debug(f"Timestamp is None! {data=}")
 
         return cls(**data)
 
@@ -162,7 +160,7 @@ class PendingMessage:
             # Sort by UDH part number
             self.parts.sort(key=lambda part: part.udh_info.current_part if part.udh_info else 999)
         except Exception as e:
-            logger.warning(f"Failed to sort message parts: {e}", exc_info=e)
+            logfire.warning(f"Failed to sort message parts: {e}", exc_info=e)
 
         # Join all text parts
         parts_text = [part.text for part in self.parts]

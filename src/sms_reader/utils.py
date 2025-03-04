@@ -1,5 +1,4 @@
 import datetime
-import logging
 import string
 
 from typing import TypedDict
@@ -8,9 +7,6 @@ import logfire
 import messaging.sms
 
 from sms_reader.models import SMSMessage, UDHInfo
-
-
-logger = logging.getLogger(__name__)
 
 
 class ParseTextModeResponse(TypedDict):
@@ -59,7 +55,7 @@ def decode_ucs2_text(text: str) -> str:
         try:
             return bytearray.fromhex(text).decode("utf-16-be")
         except Exception as e:
-            logger.error(f"Failed to decode UCS2 text: {e}", exc_info=e)
+            logfire.error(f"Failed to decode UCS2 text: {e}", exc_info=e)
 
     return text
 
@@ -108,7 +104,7 @@ def parse_sms_timestamp(timestamp: str | datetime.datetime | None) -> datetime.d
 
         return dt
     except Exception as e:
-        logger.error(f"Error parsing timestamp '{timestamp}': {e}", exc_info=e)
+        logfire.error(f"Error parsing timestamp '{timestamp}': {e}", exc_info=e)
         return datetime.datetime.now(datetime.UTC)
 
 
@@ -144,7 +140,7 @@ def decode_pdu(sms_index: str, pdu_data: str) -> SMSMessage | None:
         udh_info = None
         if hasattr(sms, "udh") and sms.udh:
             # Log UDH information for debugging
-            logger.debug(f"UDH: {sms.udh}")
+            logfire.debug(f"UDH: {sms.udh}")
 
             # Check for concatenation information
             if hasattr(sms.udh, "concat") and sms.udh.concat:
@@ -153,7 +149,7 @@ def decode_pdu(sms_index: str, pdu_data: str) -> SMSMessage | None:
                     total_parts=sms.udh.concat.cnt,  # Total number of parts
                     current_part=sms.udh.concat.seq,  # Current part number (sequence)
                 )
-                logger.debug(
+                logfire.debug(
                     f"Found multipart SMS: part {udh_info.current_part}/{udh_info.total_parts}, ref: {udh_info.ref_num}"
                 )
 
@@ -178,7 +174,7 @@ def decode_pdu(sms_index: str, pdu_data: str) -> SMSMessage | None:
             if (sender_type & 0x70) == 0x50:  # noqa: PLR2004
                 is_alphanumeric = True
         except Exception as e:
-            logger.debug(f"Error parsing PDU structure: {e}")
+            logfire.debug(f"Error parsing PDU structure: {e}")
 
         # Return structured SMS information
         return SMSMessage(
@@ -192,5 +188,5 @@ def decode_pdu(sms_index: str, pdu_data: str) -> SMSMessage | None:
         )
 
     except Exception as e:
-        logger.error(f"Failed to decode PDU data: {e}", exc_info=e)
+        logfire.error(f"Failed to decode PDU data: {e}", exc_info=e)
         return None

@@ -1,6 +1,5 @@
 import asyncio
 import datetime
-import logging
 
 import logfire
 
@@ -27,8 +26,6 @@ from telegram.ext import (
 )
 
 
-logger = logging.getLogger(__name__)
-
 settings = get_settings()
 
 # Globals
@@ -54,12 +51,12 @@ class SMSBot:
         """
         app = self.application
         if not (app and settings.bot.allowed_user_id):
-            logger.warning("Cannot forward SMS: missing user ID or application not initialized")
+            logfire.warning("Cannot forward SMS: missing user ID or application not initialized")
             return
 
         # Store the message in bot_data for history
         await self.store_sms_message(sms)
-        logger.info(f"Received SMS from {sms.sender}: {sms.text[:50]}")
+        logfire.info(f"Received SMS from {sms.sender}: {sms.text[:50]}")
 
         # Format the message
         message_text = f"📩 <b>New SMS received</b>\n\n{sms.to_html()}"
@@ -73,7 +70,7 @@ class SMSBot:
                 parse_mode=ParseMode.HTML,
             )
         except Exception as e:
-            logger.error(f"Failed to forward SMS to Telegram: {e}", exc_info=e)
+            logfire.error(f"Failed to forward SMS to Telegram: {e}", exc_info=e)
 
     @logfire.instrument("Get SMS")
     async def get_sms_messages(self) -> list[SMSMessage]:
@@ -83,7 +80,7 @@ class SMSBot:
         :return: List of stored SMS messages
         """
         if not self.application:
-            logger.error("Cannot retrieve SMS: application not initialized")
+            logfire.error("Cannot retrieve SMS: application not initialized")
             return []
         bot_data = self.application.bot_data
         bot_data.setdefault("sms_messages", [])
@@ -99,7 +96,7 @@ class SMSBot:
         """
 
         if not self.application:
-            logger.error("Cannot store SMS: application not initialized")
+            logfire.error("Cannot store SMS: application not initialized")
             return
         bot_data = self.application.bot_data
 
@@ -109,19 +106,19 @@ class SMSBot:
             bot_data["sms_messages"].append(sms.to_dict())
 
             # Log the storage
-            logger.info(f"Stored SMS from {sms.sender} in persistence storage")
+            logfire.info(f"Stored SMS from {sms.sender} in persistence storage")
 
     @logfire.instrument("Clear Storage")
     async def clear_storage(self) -> None:
         """Clear the bot's persistence storage."""
         if not self.application:
-            logger.error("Cannot clear storage: application not initialized")
+            logfire.error("Cannot clear storage: application not initialized")
             return
         bot_data = self.application.bot_data
 
         async with self.bot_data_lock:
             bot_data.clear()
-            logger.info("Cleared bot persistence storage")
+            logfire.info("Cleared bot persistence storage")
 
     @logfire.instrument("Set Bot Commands")
     async def set_bot_commands(self, chat_id: int, include_cancel: bool = False) -> None:
@@ -132,7 +129,7 @@ class SMSBot:
         :param include_cancel: Weather to include the cancel command
         """
         if not self.application:
-            logger.error("Cannot set commands: application not initialized")
+            logfire.error("Cannot set commands: application not initialized")
             return
 
         commands = [
@@ -148,9 +145,9 @@ class SMSBot:
         try:
             # Set commands specifically for this chat
             await self.application.bot.set_my_commands(commands=commands, scope={"type": "chat", "chat_id": chat_id})
-            logger.info(f"Bot commands set for chat {chat_id} (with cancel: {include_cancel})")
+            logfire.info(f"Bot commands set for chat {chat_id} (with cancel: {include_cancel})")
         except Exception as e:
-            logger.error(f"Failed to set bot commands: {e}", exc_info=e)
+            logfire.error(f"Failed to set bot commands: {e}", exc_info=e)
 
     @logfire.instrument("Check Access")
     async def _check_access(self, update: Update) -> bool:
@@ -161,14 +158,14 @@ class SMSBot:
         """
         user = update.effective_user
         if not user:
-            logger.warning("No user information available in the update")
+            logfire.warning("No user information available in the update")
             return False
         if user.id != settings.bot.allowed_user_id:
             await unauthorized_response(update)
-            logger.warning(f"Unauthorized access attempt by user {user.id} ({user.username})")
+            logfire.warning(f"Unauthorized access attempt by user {user.id} ({user.username})")
             return False
         if not self.modem:
-            logger.error("GSM modem is not initialized!")
+            logfire.error("GSM modem is not initialized!")
             msg = update.message
             if msg:
                 await msg.reply_text("GSM modem is not initialized.")
@@ -201,7 +198,7 @@ class SMSBot:
         recent_messages = sorted_messages[: settings.bot.recent_messages_count]
 
         # Create response text
-        logger.info(f"Showing {len(recent_messages)} of {total_messages} recent messages")
+        logfire.info(f"Showing {len(recent_messages)} of {total_messages} recent messages")
         response = (
             f"📋 <b>Recent SMS Messages</b> (showing {len(recent_messages)} of {total_messages})\n\n"
             f"{'\n\n'.join(msg.to_html() for msg in recent_messages)}"
@@ -212,44 +209,44 @@ class SMSBot:
     @logfire.instrument("Command: /clear")
     async def cmd_clear(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle the /clear command."""
-        logger.info("Processing /clear command")
+        logfire.info("Processing /clear command")
 
         if not await self._check_access(update):
             return
         if not update.message or not update.effective_chat:
-            logger.error("Invalid update object in clear command")
+            logfire.error("Invalid update object in clear command")
             return
 
-        logger.debug("Clearing message storage")
+        logfire.debug("Clearing message storage")
         await self.clear_storage()
         await update.message.reply_text("🧹 Message history cleared!")
-        logger.info("Message history cleared successfully")
+        logfire.info("Message history cleared successfully")
 
     @logfire.instrument("Command: /send")
     async def cmd_send(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Handle the /send command."""
-        logger.info("Processing /send command")
+        logfire.info("Processing /send command")
 
         if not await self._check_access(update):
             return ConversationHandler.END
         if not update.message or not update.effective_chat or context.user_data is None:
-            logger.error("Invalid update object or context in send command")
+            logfire.error("Invalid update object or context in send command")
             return ConversationHandler.END
 
-        logger.debug("Setting bot commands with cancel option")
+        logfire.debug("Setting bot commands with cancel option")
         await self.set_bot_commands(update.effective_chat.id, include_cancel=True)
 
         args = context.args
-        logger.debug(f"Send command received with {len(args) if args else 0} arguments")
+        logfire.debug(f"Send command received with {len(args) if args else 0} arguments")
 
         if not args:
-            logger.debug("No arguments provided, requesting phone number")
+            logfire.debug("No arguments provided, requesting phone number")
             await update.message.reply_text("Please provide a phone number or forward a contact to send an SMS to.")
             return WAITING_FOR_NUMBER
 
         elif len(args) == 1:
             phone_number = args[0]
-            logger.debug(f"Phone number provided: {phone_number}, waiting for message")
+            logfire.debug(f"Phone number provided: {phone_number}, waiting for message")
             context.user_data["send_to_number"] = phone_number
             await update.message.reply_text(f"Please enter the message to send to {phone_number}:")
             return WAITING_FOR_MESSAGE
@@ -257,10 +254,10 @@ class SMSBot:
         else:
             phone_number = args[0]
             message_text = " ".join(args[1:])
-            logger.info(f"Full SMS command received for {phone_number}")
+            logfire.info(f"Full SMS command received for {phone_number}")
 
             result = await self.send_sms(update, phone_number, message_text)
-            logger.debug("Removing cancel command after send operation")
+            logfire.debug("Removing cancel command after send operation")
             await self.set_bot_commands(update.effective_chat.id, include_cancel=False)
 
             return result
@@ -268,42 +265,42 @@ class SMSBot:
     @logfire.instrument("Command: /cancel")
     async def cancel_send(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Cancel the sending conversation."""
-        logger.info("Processing send cancellation")
+        logfire.info("Processing send cancellation")
 
         if not update.message or not update.effective_chat or context.user_data is None:
-            logger.error("Invalid update object in cancel operation")
+            logfire.error("Invalid update object in cancel operation")
             return ConversationHandler.END
 
         await update.message.reply_text("SMS sending cancelled.")
 
         if "send_to_number" in context.user_data:
-            logger.debug("Clearing stored phone number from user data")
+            logfire.debug("Clearing stored phone number from user data")
             del context.user_data["send_to_number"]
 
-        logger.debug("Removing cancel command from menu")
+        logfire.debug("Removing cancel command from menu")
         await self.set_bot_commands(update.effective_chat.id, include_cancel=False)
 
-        logger.info("Send operation cancelled successfully")
+        logfire.info("Send operation cancelled successfully")
         return ConversationHandler.END
 
     @staticmethod
     @logfire.instrument("Handle: Contact")
     async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Handle a contact message during sending conversation."""
-        logger.info("Processing contact message")
+        logfire.info("Processing contact message")
 
         if not update.message or not update.message.contact or context.user_data is None:
-            logger.error("Invalid contact message received")
+            logfire.error("Invalid contact message received")
             return ConversationHandler.END
 
         contact = update.message.contact
         if not contact.phone_number:
-            logger.warning("Contact has no phone number")
+            logfire.warning("Contact has no phone number")
             await update.message.reply_text("This contact doesn't have a phone number.")
             return WAITING_FOR_NUMBER
 
         phone_number = format_phone_number(contact.phone_number)
-        logger.debug(f"Formatted phone number: {phone_number}")
+        logfire.debug(f"Formatted phone number: {phone_number}")
 
         context.user_data["send_to_number"] = phone_number
 
@@ -311,7 +308,7 @@ class SMSBot:
         if contact.last_name:
             name += f" {contact.last_name}"
 
-        logger.info(f"Contact processed: {name} ({phone_number})")
+        logfire.info(f"Contact processed: {name} ({phone_number})")
         await update.message.reply_text(f"Please enter the message to send to {name} ({phone_number}):")
         return WAITING_FOR_MESSAGE
 
@@ -413,47 +410,47 @@ class SMSBot:
     @logfire.instrument("Handle: SMS Reply")
     async def handle_sms_reply(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle replies to SMS messages."""
-        logger.info("Processing SMS reply")
+        logfire.info("Processing SMS reply")
 
         if not await self._check_access(update):
             return
         if not update.message:
-            logger.error("No message in update for SMS reply")
+            logfire.error("No message in update for SMS reply")
             return
 
         # Get the original message that was replied to
         replied_to = update.message.reply_to_message
         if not replied_to or not replied_to.text:
-            logger.warning("Invalid reply: no original message found")
+            logfire.warning("Invalid reply: no original message found")
             await update.message.reply_text("Please reply to an SMS message.")
             return
 
         # Extract sender from the original message
         sender = extract_sender_from_message(replied_to.text)
         if not sender:
-            logger.warning("Could not extract sender from original message")
+            logfire.warning("Could not extract sender from original message")
             await update.message.reply_text("Could not determine the recipient from the original message.")
             return
 
-        logger.info(f"Processing reply to sender: {sender}")
+        logfire.info(f"Processing reply to sender: {sender}")
         await self.reply_to_sms(update, sender)
 
     @logfire.instrument("Reply to SMS")
     async def reply_to_sms(self, update: Update, sender: str) -> None:
         """Handle replying to a specific sender."""
-        logger.debug(f"Formatting phone number for sender: {sender}")
+        logfire.debug(f"Formatting phone number for sender: {sender}")
         phone_number = format_phone_number(sender)
 
         if not update.message:
-            logger.error("No message in update for SMS reply")
+            logfire.error("No message in update for SMS reply")
             return
 
         reply_text = update.message.text
         if not reply_text:
-            logger.warning("Empty reply text")
+            logfire.warning("Empty reply text")
             return
 
-        logger.info(f"Sending reply SMS to {phone_number}")
+        logfire.info(f"Sending reply SMS to {phone_number}")
         await self.send_sms(update, phone_number, reply_text)
 
     @logfire.instrument("Send SMS")
@@ -479,11 +476,11 @@ class SMSBot:
             # Use the lock to prevent concurrent access to the modem
             async with self.modem_lock:
                 # Check if a message is long and needs to be split
-                logger.info(f"Sending SMS to {phone_number}")
+                logfire.info(f"Sending SMS to {phone_number}")
                 success = await self.modem.send_sms(phone_number, message_text)
 
             if success:
-                logger.info(f"SMS sent successfully to {phone_number}")
+                logfire.info(f"SMS sent successfully to {phone_number}")
                 await status_message.edit_text(f"✅ SMS sent successfully to {phone_number}")
 
                 # Store the message in history
@@ -497,11 +494,11 @@ class SMSBot:
                 )
                 await self.store_sms_message(sent_sms)
             else:
-                logger.error(f"Failed to send SMS to {phone_number}!")
+                logfire.error(f"Failed to send SMS to {phone_number}!")
                 await status_message.edit_text(f"❌ Failed to send SMS to {phone_number}")
         except Exception as e:
             await status_message.edit_text(f"Error sending SMS: {e!s}")
-            logger.error(f"SMS sending error: {e}", exc_info=e)
+            logfire.error(f"SMS sending error: {e}", exc_info=e)
 
         return ConversationHandler.END
 
@@ -523,10 +520,10 @@ class SMSBot:
                 setup_success = await self.modem.setup()
 
                 if not setup_success:
-                    logger.error("Failed to set up GSM modem")
+                    logfire.error("Failed to set up GSM modem")
                     raise RuntimeError("Failed to set up GSM modem")
 
-                logger.info("GSM modem initialized successfully")
+                logfire.info("GSM modem initialized successfully")
             # Start SMS monitoring in a separate task
             task = asyncio.create_task(
                 self.modem.run_sms_monitoring(
@@ -537,7 +534,7 @@ class SMSBot:
             self.shutdown_tasks.append(task)
 
         except Exception as e:
-            logger.error(f"Error initializing modem: {e}", exc_info=e)
+            logfire.error(f"Error initializing modem: {e}", exc_info=e)
             raise e from None
 
     @logfire.instrument("Setup: Handlers")
@@ -578,7 +575,7 @@ class SMSBot:
     @logfire.instrument("Shutdown")
     async def _shutdown(self, _: Application) -> None:
         """Clean up tasks and close the modem."""
-        logger.info("Shutting down...")
+        logfire.info("Shutting down...")
         for task in self.shutdown_tasks:
             task.cancel()
 
@@ -586,11 +583,11 @@ class SMSBot:
         """Main function to run the SMS Telegram bot."""
         # Check if a token is provided
         if not settings.bot.token:
-            logger.error("No bot_token provided in settings")
+            logfire.error("No bot_token provided in settings")
             return
 
         if not settings.bot.allowed_user_id:
-            logger.warning("No allowed_user_id set, the bot will not respond to any user")
+            logfire.warning("No allowed_user_id set, the bot will not respond to any user")
 
         # Create persistence
         persistence = PicklePersistence(

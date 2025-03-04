@@ -1,9 +1,9 @@
 import asyncio
-import logging
 import re
 
 from collections.abc import Awaitable, Callable
 
+import logfire
 import phonenumbers
 
 from config import get_settings
@@ -14,8 +14,6 @@ from telegram.ext import ContextTypes
 
 
 settings = get_settings()
-
-logger = logging.getLogger(__name__)
 
 
 async def retry_telegram_api[ReturnType: any, **P](
@@ -38,7 +36,7 @@ async def retry_telegram_api[ReturnType: any, **P](
             last_exception = e
             retries += 1
             wait_time = 2**retries  # Exponential backoff
-            logger.warning(
+            logfire.warning(
                 f"Telegram API error: {e}. Retrying in {wait_time} seconds... (Attempt {retries}/{max_retries})"
             )
             await asyncio.sleep(wait_time)
@@ -46,12 +44,12 @@ async def retry_telegram_api[ReturnType: any, **P](
             last_exception = e
             # Use the time specified by Telegram
             wait_time = e.retry_after
-            logger.warning(f"Telegram API rate limit. Retrying in {wait_time} seconds...")
+            logfire.warning(f"Telegram API rate limit. Retrying in {wait_time} seconds...")
             await asyncio.sleep(wait_time)
 
     # If we've exhausted retries, raise the last exception
     if last_exception:
-        logger.error(f"Failed after {max_retries} retries: {last_exception}")
+        logfire.error(f"Failed after {max_retries} retries: {last_exception}")
         raise last_exception
 
 
@@ -136,9 +134,9 @@ async def unauthorized_response(update: Update) -> None:
     await msg.reply_text("You are not authorized to use this bot.")
 
     if user:
-        logger.warning(f"Unauthorized access attempt by user {user.id} ({user.username})")
+        logfire.warning(f"Unauthorized access attempt by user {user.id} ({user.username})")
         return
-    logger.warning("Unauthorized access attempt by unknown user")
+    logfire.warning("Unauthorized access attempt by unknown user")
 
 
 async def check_access(update: Update) -> bool:
@@ -158,7 +156,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     :param update: The update that caused the error.
     :param context: The context for this handler.
     """
-    logger.error("Exception while handling an update:", exc_info=context.error)
+    logfire.error("Exception while handling an update:", exc_info=context.error)
 
     # Get the error message
     error_message = str(context.error)

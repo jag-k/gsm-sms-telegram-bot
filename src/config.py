@@ -1,18 +1,20 @@
 import logging
+import tomllib
 
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-import logfire as lf
+import logfire
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+_default_log_level = logging.WARNING  # Default logging level for non-project modules
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s [%(name)s]: %(message)s",
-    level=logging.WARNING,  # Default logging level for non-project modules
+    level=_default_log_level,
 )
 
 
@@ -22,6 +24,10 @@ DATA_DIR = BASE_DIR / "data"
 DOCKER_DATA_DIR = Path("/data")
 PERSISTENCE_FILE_NAME = "sms_bot_data.pickle"
 
+_project_info = tomllib.loads(Path(BASE_DIR, "pyproject.toml").read_text())["project"]
+PROJECT_NAME = _project_info["name"]
+PROJECT_VERSION = _project_info["version"]
+
 
 def is_running_in_docker() -> bool:
     # Check for the presence of the .dockerenv file
@@ -30,7 +36,7 @@ def is_running_in_docker() -> bool:
 
     # Check for the presence of 'docker' in the cgroup file
     try:
-        with Path("/proc/self/cgroup").open() as f:
+        with Path("/proc/selogfire/cgroup").open() as f:
             for line in f:
                 if "docker" in line:
                     return True
@@ -93,39 +99,41 @@ class Settings(BaseSettings):
         env_nested_delimiter="__",
     )
 
-    log_level: lf.LevelName = Field("info", description="Logging level")
+    log_level: logfire.LevelName = Field("info", description="Logging level")
 
     bot: BotSettings = Field(default_factory=BotSettings, description="Settings for the SMS Telegram Bot")
     modem: ModemSettings = Field(default_factory=ModemSettings, description="Settings for the GSM Modem")
     logfire: LogfireSettings = Field(default_factory=LogfireSettings, description="Settings for Logfire")
 
 
-def configure_logfire_and_logging(settings: Settings) -> None:
+def configure_logfire(settings: Settings) -> None:
     """Configure Logfire and logging based on the provided settings."""
 
-    logging.basicConfig(handlers=[lf.LogfireLoggingHandler()])
+    logging.basicConfig(handlers=[logfire.LogfireLoggingHandler(_default_log_level)])
     logging.getLogger("bot").setLevel(settings.log_level.upper())
     logging.getLogger("sms_reader").setLevel(settings.log_level.upper())
 
-    lf.configure(
+    logfire.configure(
         local=settings.logfire.environment == "local",
         send_to_logfire="if-token-present",
         token=settings.logfire.token,
+        service_name=PROJECT_NAME,
+        service_version=PROJECT_VERSION,
         environment=settings.logfire.environment,
-        console=lf.ConsoleOptions(
+        console=logfire.ConsoleOptions(
             verbose=True,
             min_log_level=settings.log_level,
         ),
-        code_source=lf.CodeSource(
+        code_source=logfire.CodeSource(
             repository="https://github.com/jag-k/gsm-sms-telegram-bot",
             revision=settings.logfire.revision,
         ),
     )
-    lf.instrument_system_metrics()
+    logfire.instrument_system_metrics()
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     settings = Settings()
-    configure_logfire_and_logging(settings)
+    configure_logfire(settings)
     return settings

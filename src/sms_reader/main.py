@@ -1,6 +1,5 @@
 import asyncio
 import datetime
-import logging
 import re
 
 from asyncio import StreamReader, StreamWriter
@@ -37,9 +36,6 @@ from sms_reader.utils import (
     parse_sms_timestamp,
     parse_text_mode_response,
 )
-
-
-logger = logging.getLogger(__name__)
 
 
 class GSMModem:
@@ -93,10 +89,10 @@ class GSMModem:
                 url=self.port,
                 baudrate=self.baud_rate,
             )
-            logger.info("Connected to GSM modem.")
+            logfire.info("Connected to GSM modem.")
             return True
         except Exception as e:
-            logger.error(f"Failed to connect to modem: {e}", exc_info=e)
+            logfire.error(f"Failed to connect to modem: {e}", exc_info=e)
             return False
 
     async def _clear_input_buffer(self, wait_timeout: float = MIN_SIGNIFICANT_DELAY) -> None:
@@ -107,7 +103,7 @@ class GSMModem:
         try:
             pending = await asyncio.wait_for(self._reader.read(BUFFER_SIZE), wait_timeout)
             if pending:
-                logger.debug(f"Cleared {len(pending)} bytes from input buffer")
+                logfire.debug(f"Cleared {len(pending)} bytes from input buffer")
         except TimeoutError:
             pass
 
@@ -165,7 +161,7 @@ class GSMModem:
             await self._clear_input_buffer()
 
             # Send the command
-            logger.debug(f"Sending AT command: {command}")
+            logfire.debug(f"Sending AT command: {command}")
             self._writer.write((command + "\r\n").encode())
             await self._writer.drain()  # Ensure the command is sent
 
@@ -182,12 +178,12 @@ class GSMModem:
 
             # Check for timeout
             if not response and elapsed >= wait_time:
-                logger.warning(f"Command timed out after {elapsed:.2f}s: {command}")
+                logfire.warning(f"Command timed out after {elapsed:.2f}s: {command}")
                 return ATResponse(raw_response="", error_message=f"Command timed out: {command}")
 
             # Parse the response - simplified logic
             if "ERROR" in response:
-                logger.warning(f"Command returned ERROR: {command}")
+                logfire.warning(f"Command returned ERROR: {command}")
                 return ATResponse(
                     raw_response=response,
                     error_message=f"Command failed: {command}",
@@ -197,7 +193,7 @@ class GSMModem:
             return ATResponse(raw_response=response)
 
         except Exception as e:
-            logger.error(f"Error sending AT command {command}: {e}", exc_info=e)
+            logfire.error(f"Error sending AT command {command}: {e}", exc_info=e)
             return ATResponse(raw_response="", error_message=str(e))
 
     @logfire.instrument("Setup: Check Modem Status")
@@ -235,11 +231,11 @@ class GSMModem:
         """Configure the modem for SMS reception with proper sender ID handling."""
         # Connect to the modem
         if not await self.connect():
-            logger.error("Failed to connect to modem")
+            logfire.error("Failed to connect to modem")
             return False
 
         # Create tasks for independent operations that can run in parallel
-        logger.info("Initializing modem - checking status and sending basic commands")
+        logfire.info("Initializing modem - checking status and sending basic commands")
 
         # Run these commands concurrently to speed up initialization
         status = await self.check_modem_status()
@@ -248,47 +244,47 @@ class GSMModem:
 
         # Check SIM readiness
         if not status.sim_ready:
-            logger.error("SIM card not ready")
+            logfire.error("SIM card not ready")
             return False
 
         # Handle network registration with optimized retry logic
         if not status.network_registered:
-            logger.warning("Not registered to network, waiting for registration")
+            logfire.warning("Not registered to network, waiting for registration")
             # Try up to 5 times with shorter wait times between checks
             max_retries = 5
             for i in range(max_retries):
-                logger.info(f"Waiting for network registration... (attempt {i + 1}/{max_retries})")
+                logfire.info(f"Waiting for network registration... (attempt {i + 1}/{max_retries})")
                 await asyncio.sleep(1)
                 status = await self.check_modem_status()
                 if status.network_registered:
-                    logger.info("Network registered successfully")
+                    logfire.info("Network registered successfully")
                     break
 
             if not status.network_registered:
-                logger.error("Failed to register with network after multiple attempts")
+                logfire.error("Failed to register with network after multiple attempts")
                 return False
 
         # Delete any existing messages and load contacts in parallel
-        logger.info("Loading contacts")
+        logfire.info("Loading contacts")
         await self.get_sim_contacts()
 
         # Configure SMS mode with a fast fallback
-        logger.info("Configuring SMS mode")
+        logfire.info("Configuring SMS mode")
         pdu_response = await self._send_at_command("AT+CMGF=0")
         if pdu_response.success:
             await self._send_at_command("AT+CSDH=1")  # Enable detailed SMS headers
             self._sms_reader = self.read_sms_pdu
-            logger.info("Using PDU mode for SMS reception")
+            logfire.info("Using PDU mode for SMS reception")
         else:
             # Fall back to text mode immediately without delay
             text_response = await self._send_at_command("AT+CMGF=1")
             if not text_response.success:
-                logger.error("Failed to set any SMS mode")
+                logfire.error("Failed to set any SMS mode")
                 return False
             self._sms_reader = self.read_sms_text
-            logger.info("Using text mode for SMS reception")
+            logfire.info("Using text mode for SMS reception")
 
-        logger.info("Modem setup completed successfully")
+        logfire.info("Modem setup completed successfully")
         return True
 
     @logfire.instrument("Send SMS notification {sms.sender}")
@@ -299,14 +295,14 @@ class GSMModem:
         :return: True if notification was sent, False otherwise
         """
         if not self.on_sms_received:
-            logger.warning("No callback function set for SMS notification")
+            logfire.warning("No callback function set for SMS notification")
             return False
 
         # Handle both sync and async callbacks
         callback_result = self.on_sms_received(sms)
         if asyncio.iscoroutine(callback_result):
             await callback_result
-        logger.info(f"Sent notification for SMS from {sms.sender}")
+        logfire.info(f"Sent notification for SMS from {sms.sender}")
 
         # Clean up expired messages
         await self._cleanup_pending_messages()
@@ -324,7 +320,7 @@ class GSMModem:
                 return
 
             self._last_cleanup = now
-            logger.debug("Running pending message cleanup")
+            logfire.debug("Running pending message cleanup")
             expired_senders = []
 
             for sender, pending in self._pending_messages.items():
@@ -337,7 +333,7 @@ class GSMModem:
 
                 # Check if this message has expired
                 if time_diff > self._merge_timeout:
-                    logger.debug(f"Message from {sender} expired after {time_diff:.1f}s")
+                    logfire.debug(f"Message from {sender} expired after {time_diff:.1f}s")
 
                     # Bug fix: Check for complete multipart messages before discarding
                     if pending.is_complete:
@@ -346,7 +342,7 @@ class GSMModem:
 
                     # Notify if not already notified
                     if not pending.notified:
-                        logger.debug("Notifying about expired/complete pending message")
+                        logfire.debug("Notifying about expired/complete pending message")
                         await self._notify_single_message(pending.message)
                         pending.notified = True
 
@@ -354,16 +350,16 @@ class GSMModem:
                     expired_senders.append(sender)
 
                     if pending.is_complete:
-                        logger.info(f"Completed multipart message from {sender}")
+                        logfire.info(f"Completed multipart message from {sender}")
                     else:
-                        logger.warning(f"Incomplete multipart message from {sender} expired after {time_diff:.1f}s")
+                        logfire.warning(f"Incomplete multipart message from {sender} expired after {time_diff:.1f}s")
 
             # Remove expired messages
             for sender in expired_senders:
                 del self._pending_messages[sender]
 
             if expired_senders:
-                logger.info(f"Cleaned up {len(expired_senders)} expired pending messages")
+                logfire.info(f"Cleaned up {len(expired_senders)} expired pending messages")
 
     async def _process_message__notify(self, pending: PendingMessage, key: str) -> None:
         """Notify about a message if needed.
@@ -380,7 +376,7 @@ class GSMModem:
 
             # Remove from pending if complete
             if pending.is_complete:
-                logger.debug(f"UDH message {key} complete, cleaning up")
+                logfire.debug(f"UDH message {key} complete, cleaning up")
                 del self._pending_messages[key]
 
     async def _process_udh_message(self, sms: SMSMessage) -> bool:
@@ -420,7 +416,7 @@ class GSMModem:
 
         :param sms: The SMS message to process
         """
-        logger.debug(f"Processing SMS from {sms.sender}")
+        logfire.debug(f"Processing SMS from {sms.sender}")
 
         # Skip merging if disabled
         if not self._merge_enabled:
@@ -455,7 +451,7 @@ class GSMModem:
 
                 # Remove from pending if complete
                 if pending.is_complete:
-                    logger.debug(f"UDH message {key} complete, cleaning up")
+                    logfire.debug(f"UDH message {key} complete, cleaning up")
                     del self._pending_messages[key]
         else:
             # Not a multipart message, then notify
@@ -464,16 +460,16 @@ class GSMModem:
         # Clean up expired messages
         await self._cleanup_pending_messages()
 
-    @logfire.instrument("Read SMS: PDU Mode")
+    @logfire.instrument("Read SMS: PDU Mode", extract_args=False)
     async def read_sms_pdu(self) -> list[SMSMessage]:
         """Read all stored SMS messages in PDU mode and delete them after reading."""
-        logger.debug("Reading SMS messages in PDU mode")
+        logfire.debug("Reading SMS messages in PDU mode")
         messages: list[SMSMessage] = []
 
         try:
             response = await self._send_at_command("AT+CMGL=4")  # "ALL" messages
             if not response.success:
-                logger.error("Failed to list SMS messages in PDU mode")
+                logfire.error("Failed to list SMS messages in PDU mode")
                 return messages
 
             lines = response.raw_response.split("\n")
@@ -500,19 +496,19 @@ class GSMModem:
                         # Delete the message after processing
                         await self._send_at_command(f"AT+CMGD={sms_index}")
                 except Exception as e:
-                    logger.error(f"Error processing PDU message: {e}", exc_info=e)
+                    logfire.error(f"Error processing PDU message: {e}", exc_info=e)
 
                 i += 2
 
         except Exception as e:
-            logger.error(f"Error reading PDU messages: {e}", exc_info=e)
+            logfire.error(f"Error reading PDU messages: {e}", exc_info=e)
 
         return messages
 
     @logfire.instrument("Read SMS: Text Mode")
     async def read_sms_text(self) -> list[SMSMessage]:
         """Read all stored SMS messages in text mode and delete them after reading."""
-        logger.debug("Reading SMS messages in text mode")
+        logfire.debug("Reading SMS messages in text mode")
         messages: list[SMSMessage] = []
 
         try:
@@ -554,10 +550,10 @@ class GSMModem:
                     # Delete the message after processing
                     await self._send_at_command(f"AT+CMGD={sms_index}")
                 except Exception as e:
-                    logger.error(f"Error processing text mode entry: {e}", exc_info=e)
+                    logfire.error(f"Error processing text mode entry: {e}", exc_info=e)
 
         except Exception as e:
-            logger.error(f"Error reading text mode messages: {e}", exc_info=e)
+            logfire.error(f"Error reading text mode messages: {e}", exc_info=e)
 
         return messages
 
@@ -617,8 +613,8 @@ class GSMModem:
         last_message_time = now_utc()
         message_activity = False
 
-        logger.info(f"Starting SMS monitoring with base interval of {interval:.1f}s")
-        logger.info(f"Using active interval: {active_interval:.1f}s, max interval: {max_inactive_interval:.1f}s")
+        logfire.info(f"Starting SMS monitoring with base interval of {interval:.1f}s")
+        logfire.info(f"Using active interval: {active_interval:.1f}s, max interval: {max_inactive_interval:.1f}s")
 
         while True:
             check_start = now_utc()
@@ -626,13 +622,13 @@ class GSMModem:
             # Check for new messages
             async with lock:
                 if not self.status:
-                    logger.warning("Modem not yet set up before monitoring! Running setup...")
+                    logfire.warning("Modem not yet set up before monitoring! Running setup...")
                     ok = await self.setup()
                     if not ok:
-                        logger.error(f"Failed to set up modem before monitoring! Retrying after {interval:.2f}s...")
+                        logfire.error(f"Failed to set up modem before monitoring! Retrying after {interval:.2f}s...")
                         await asyncio.sleep(interval)
                         continue
-                    logger.info("Modem setup completed successfully!")
+                    logfire.info("Modem setup completed successfully!")
 
                 messages = await self._sms_reader()
 
@@ -645,7 +641,7 @@ class GSMModem:
                 current_interval = active_interval
 
                 # Log activity
-                logger.info(f"Processed {len(messages)} new messages")
+                logfire.info(f"Processed {len(messages)} new messages")
 
             else:
                 # No messages received, check if we should increase an interval
@@ -656,12 +652,12 @@ class GSMModem:
                 if message_activity and inactive_time > ACTIVE_MODE_TIMEOUT:
                     message_activity = False
                     current_interval = interval
-                    logger.debug("Returning to base polling interval")
+                    logfire.debug("Returning to base polling interval")
                 # If we continue to see no activity for a while, gradually increase an interval
                 elif not message_activity and inactive_time > INACTIVE_MODE_THRESHOLD:
                     # Gradually increase an interval up to max_inactive_interval
                     current_interval = min(current_interval * 1.2, max_inactive_interval)
-                    logger.debug(f"Adjusting polling interval to {current_interval:.1f}s")
+                    logfire.debug(f"Adjusting polling interval to {current_interval:.1f}s")
 
             # Calculate actual sleep time (accounting for processing time)
             elapsed = (now_utc() - check_start).total_seconds()
@@ -671,7 +667,7 @@ class GSMModem:
 
             # Log unusual processing times
             if elapsed > SIGNIFICANT_PROCESSING_TIME:
-                logger.debug(f"SMS check took {elapsed:.2f}s, sleeping {sleep_time:.2f}s")
+                logfire.debug(f"SMS check took {elapsed:.2f}s, sleeping {sleep_time:.2f}s")
 
             await asyncio.sleep(sleep_time)
 
@@ -701,7 +697,7 @@ class GSMModem:
                     response += chunk.decode(errors="ignore")
                     if ">" in response:
                         elapsed = (now_utc() - start_time).total_seconds()
-                        logger.debug(f"SMS prompt received in {elapsed:.2f}s")
+                        logfire.debug(f"SMS prompt received in {elapsed:.2f}s")
                         return True, response
 
                 # Small sleep between reads if no prompt found
@@ -733,7 +729,7 @@ class GSMModem:
                     # Check for success indicators
                     if "OK" in response or "+CMGS:" in response:
                         elapsed = (now_utc() - start_time).total_seconds()
-                        logger.debug(f"Response completed in {elapsed:.2f}s")
+                        logfire.debug(f"Response completed in {elapsed:.2f}s")
                         break
 
                 # Small sleep between reads
@@ -757,7 +753,7 @@ class GSMModem:
             await self._clear_input_buffer(MIN_SIGNIFICANT_DELAY)
 
             # Send the command (AT+CMGS="number" or similar)
-            logger.debug(f"Sending SMS command: {cmd}")
+            logfire.debug(f"Sending SMS command: {cmd}")
             self._writer.write((cmd + "\r").encode())
             await self._writer.drain()
 
@@ -765,10 +761,10 @@ class GSMModem:
             prompt_received, response = await self._read_until_prompt(wait_time=SMS_PROMPT_TIMEOUT)
 
             if not prompt_received:
-                logger.warning("SMS prompt not received, sending message anyway")
+                logfire.warning("SMS prompt not received, sending message anyway")
 
             # Send the message content followed by Ctrl+Z
-            logger.debug(f"Sending SMS content: {message[:SMS_PREVIEW_LENGTH]}...")
+            logfire.debug(f"Sending SMS content: {message[:SMS_PREVIEW_LENGTH]}...")
             self._writer.write((message + chr(26)).encode())  # chr(26) is Ctrl+Z
             await self._writer.drain()
 
@@ -776,11 +772,11 @@ class GSMModem:
             response = await self._read_until_response(wait_time=SMS_SEND_TIMEOUT)
 
             if response:
-                logger.debug(f"SMS send response: {response[:SMS_RESPONSE_PREVIEW]}...")
+                logfire.debug(f"SMS send response: {response[:SMS_RESPONSE_PREVIEW]}...")
             return response
 
         except Exception as e:
-            logger.error(f"Error in _send_sms_message: {e}", exc_info=e)
+            logfire.error(f"Error in _send_sms_message: {e}", exc_info=e)
             return ""
 
     @logfire.instrument("Send SMS {phone_number}: Text Mode")
@@ -794,7 +790,7 @@ class GSMModem:
             response = await self._send_sms_message(cmd, message)
             return "OK" in response or "+CMGS:" in response
         except Exception as e:
-            logger.error(f"Error sending SMS: {e}", exc_info=e)
+            logfire.error(f"Error sending SMS: {e}", exc_info=e)
             return False
 
     @logfire.instrument("Send SMS {phone_number}: PDU Mode")
@@ -819,20 +815,20 @@ class GSMModem:
 
             return "OK" in response or "+CMGS:" in response
         except Exception as e:
-            logger.error(f"Error sending SMS in PDU mode: {e}", exc_info=e)
+            logfire.error(f"Error sending SMS in PDU mode: {e}", exc_info=e)
             return False
 
     @logfire.instrument("Send SMS {phone_number}")
     async def send_sms(self, phone_number: str, message: str) -> bool:
         """Send an SMS message using the best available method."""
-        logger.info(f"Sending SMS to {phone_number}")
+        logfire.info(f"Sending SMS to {phone_number}")
 
         # Try text mode first
         try:
             if await self.send_sms_text(phone_number, message):
                 return True
         except Exception as e:
-            logger.debug("Text mode failed, trying PDU mode", exc_info=e)
+            logfire.debug("Text mode failed, trying PDU mode", exc_info=e)
 
         # Fall back to PDU mode
         return await self.send_sms_pdu(phone_number, message)
@@ -857,7 +853,7 @@ class GSMModem:
         for i in range(0, len(message), max_length):
             parts.append(message[i : i + max_length])
 
-        logger.info(f"Splitting message into {len(parts)} parts (unicode={is_unicode})")
+        logfire.info(f"Splitting message into {len(parts)} parts (unicode={is_unicode})")
 
         # Bug fix: Use a proper retry mechanism for failed parts
         success = True
@@ -872,11 +868,11 @@ class GSMModem:
                 if await self.send_sms(phone_number, part_text):
                     sent = True
                     break
-                logger.warning(f"Failed to send part {i}, attempt {attempt + 1}/{max_retries}")
+                logfire.warning(f"Failed to send part {i}, attempt {attempt + 1}/{max_retries}")
                 await asyncio.sleep(1)  # Shorter wait before retry
 
             if not sent:
-                logger.error(f"Failed to send part {i} of {len(parts)} after {max_retries} attempts")
+                logfire.error(f"Failed to send part {i} of {len(parts)} after {max_retries} attempts")
                 success = False
 
         return success
