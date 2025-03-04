@@ -1,15 +1,21 @@
 import asyncio
+import logging
 import re
 
 from collections.abc import Awaitable, Callable
 
 import phonenumbers
 
-from bot.main import logger, settings
+from config import Settings
 from phonenumbers import NumberParseException
 from telegram import Update
 from telegram.error import NetworkError, RetryAfter, TimedOut
 from telegram.ext import ContextTypes
+
+
+settings = Settings()
+
+logger = logging.getLogger(__name__)
 
 
 async def retry_telegram_api[ReturnType: any, **P](

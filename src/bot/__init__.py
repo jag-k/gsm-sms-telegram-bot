@@ -1,1 +1,2 @@
-from .main import SMSBot, settings
+from .main import SMSBot
+from .utils import settings
