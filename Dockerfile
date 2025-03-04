@@ -1,6 +1,6 @@
 ARG PYTHON_VERSION=3.13
 
-FROM python:${PYTHON_VERSION}-alpine as build
+FROM python:${PYTHON_VERSION}-alpine AS build
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install uv
