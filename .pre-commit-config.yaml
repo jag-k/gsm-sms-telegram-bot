@@ -35,7 +35,7 @@ repos:
         entry: ssort
         files: ^src/.*\.py$
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.9.9
+    rev: v0.9.10
     hooks:
       # Run the linter.
       - id: ruff
@@ -56,11 +56,11 @@ repos:
           - types-cachetools
           - types-pytz
   - repo: https://github.com/astral-sh/uv-pre-commit
-    rev: 0.6.4
+    rev: 0.6.6
     hooks:
       - id: uv-lock
   - repo: https://github.com/jag-k/pydantic-settings-export
-    rev: v1.0.0
+    rev: v1.0.1
     hooks:
       - id: pydantic-settings-export
         files: ^src/config\.py$

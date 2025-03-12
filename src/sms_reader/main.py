@@ -619,57 +619,60 @@ class GSMModem:
         while True:
             check_start = now_utc()
 
-            # Check for new messages
-            async with lock:
-                if not self.status:
-                    logfire.warning("Modem not yet set up before monitoring! Running setup...")
-                    ok = await self.setup()
-                    if not ok:
-                        logfire.error(f"Failed to set up modem before monitoring! Retrying after {interval:.2f}s...")
-                        await asyncio.sleep(interval)
-                        continue
-                    logfire.info("Modem setup completed successfully!")
+            with logfire.span("Check for New Messages"):
+                # Check for new messages
+                async with lock:
+                    if not self.status:
+                        logfire.warning("Modem not yet set up before monitoring! Running setup...")
+                        ok = await self.setup()
+                        if not ok:
+                            logfire.error(
+                                f"Failed to set up modem before monitoring! Retrying after {interval:.2f}s..."
+                            )
+                            await asyncio.sleep(interval)
+                            continue
+                        logfire.info("Modem setup completed successfully!")
 
-                messages = await self._sms_reader()
+                    messages = await self._sms_reader()
 
-            # Adjust polling interval based on activity
-            if messages:
-                # We received messages, so use the shorter active interval
-                # for better responsiveness
-                message_activity = True
-                last_message_time = now_utc()
-                current_interval = active_interval
+                # Adjust polling interval based on activity
+                if messages:
+                    # We received messages, so use the shorter active interval
+                    # for better responsiveness
+                    message_activity = True
+                    last_message_time = now_utc()
+                    current_interval = active_interval
 
-                # Log activity
-                logfire.info(f"Processed {len(messages)} new messages")
+                    # Log activity
+                    logfire.info(f"Processed {len(messages)} new messages")
 
-            else:
-                # No messages received, check if we should increase an interval
-                inactive_time = (now_utc() - last_message_time).total_seconds()
+                else:
+                    # No messages received, check if we should increase an interval
+                    inactive_time = (now_utc() - last_message_time).total_seconds()
 
-                # If we've been in active mode but no messages for a while,
-                # gradually return to normal polling
-                if message_activity and inactive_time > ACTIVE_MODE_TIMEOUT:
-                    message_activity = False
-                    current_interval = interval
-                    logfire.debug("Returning to base polling interval")
-                # If we continue to see no activity for a while, gradually increase an interval
-                elif not message_activity and inactive_time > INACTIVE_MODE_THRESHOLD:
-                    # Gradually increase an interval up to max_inactive_interval
-                    current_interval = min(current_interval * 1.2, max_inactive_interval)
-                    logfire.debug(f"Adjusting polling interval to {current_interval:.1f}s")
+                    # If we've been in active mode but no messages for a while,
+                    # gradually return to normal polling
+                    if message_activity and inactive_time > ACTIVE_MODE_TIMEOUT:
+                        message_activity = False
+                        current_interval = interval
+                        logfire.debug("Returning to base polling interval")
+                    # If we continue to see no activity for a while, gradually increase an interval
+                    elif not message_activity and inactive_time > INACTIVE_MODE_THRESHOLD:
+                        # Gradually increase an interval up to max_inactive_interval
+                        current_interval = min(current_interval * 1.2, max_inactive_interval)
+                        logfire.debug(f"Adjusting polling interval to {current_interval:.1f}s")
 
-            # Calculate actual sleep time (accounting for processing time)
-            elapsed = (now_utc() - check_start).total_seconds()
+                # Calculate actual sleep time (accounting for processing time)
+                elapsed = (now_utc() - check_start).total_seconds()
 
-            # Ensure we don't sleep for a negative amount of time
-            sleep_time = max(MIN_SLEEP_INTERVAL, current_interval - elapsed)
+                # Ensure we don't sleep for a negative amount of time
+                sleep_time = max(MIN_SLEEP_INTERVAL, current_interval - elapsed)
 
-            # Log unusual processing times
-            if elapsed > SIGNIFICANT_PROCESSING_TIME:
-                logfire.debug(f"SMS check took {elapsed:.2f}s, sleeping {sleep_time:.2f}s")
+                # Log unusual processing times
+                if elapsed > SIGNIFICANT_PROCESSING_TIME:
+                    logfire.debug(f"SMS check took {elapsed:.2f}s, sleeping {sleep_time:.2f}s")
 
-            await asyncio.sleep(sleep_time)
+                await asyncio.sleep(sleep_time)
 
     @logfire.instrument("Delete All SMS")
     async def delete_all_sms(self) -> bool:
