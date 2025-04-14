@@ -24,7 +24,6 @@ from sms_reader.consts import (
     SMS_HEADER_REGEX,
     SMS_PREVIEW_LENGTH,
     SMS_PROMPT_TIMEOUT,
-    SMS_RESPONSE_PREVIEW,
     SMS_SEND_TIMEOUT,
     UNICODE_CHAR_THRESHOLD,
     UNICODE_SMS_LENGTH,
@@ -730,7 +729,7 @@ class GSMModem:
                     response += chunk.decode(errors="ignore")
 
                     # Check for success indicators
-                    if "OK" in response or "+CMGS:" in response:
+                    if "OK" in response and "+CMGS:" in response:
                         elapsed = (now_utc() - start_time).total_seconds()
                         logfire.debug(f"Response completed in {elapsed:.2f}s")
                         break
@@ -764,7 +763,8 @@ class GSMModem:
             prompt_received, response = await self._read_until_prompt(wait_time=SMS_PROMPT_TIMEOUT)
 
             if not prompt_received:
-                logfire.warning("SMS prompt not received, sending message anyway")
+                logfire.error("SMS prompt '>' not received, aborting send")
+                return "ERROR: No prompt received"  # Важно! Прерываем отправку
 
             # Send the message content followed by Ctrl+Z
             logfire.debug(f"Sending SMS content: {message[:SMS_PREVIEW_LENGTH]}...")
@@ -775,23 +775,34 @@ class GSMModem:
             response = await self._read_until_response(wait_time=SMS_SEND_TIMEOUT)
 
             if response:
-                logfire.debug(f"SMS send response: {response[:SMS_RESPONSE_PREVIEW]}...")
+                logfire.debug(f"Full SMS response: {response}")
             return response
 
         except Exception as e:
             logfire.error(f"Error in _send_sms_message: {e}", exc_info=e)
-            return ""
+            return "ERROR: " + str(e)
 
     @logfire.instrument("Send SMS {phone_number}: Text Mode")
     async def send_sms_text(self, phone_number: str, message: str) -> bool:
         """Send an SMS message in text mode."""
         # Switch to text mode
-        await self._send_at_command("AT+CMGF=1")
+        mode_response = await self._send_at_command("AT+CMGF=1")
+        if "OK" not in mode_response.raw_response:
+            logfire.error("Failed to switch to text mode")
+            return False
+
         cmd = f'AT+CMGS="{phone_number}"'
 
         try:
             response = await self._send_sms_message(cmd, message)
-            return "OK" in response or "+CMGS:" in response
+
+            # Proper success check
+            success = "+CMGS:" in response and "OK" in response and "ERROR" not in response
+
+            if not success:
+                logfire.error(f"Text SMS send failed with response: {response}")
+
+            return success
         except Exception as e:
             logfire.error(f"Error sending SMS: {e}", exc_info=e)
             return False
@@ -801,7 +812,11 @@ class GSMModem:
         """Send SMS message in PDU mode."""
         try:
             # Switch to PDU mode
-            await self._send_at_command("AT+CMGF=0")
+            mode_response = await self._send_at_command("AT+CMGF=0")
+            await asyncio.sleep(0.2)
+            if "OK" not in mode_response.raw_response:
+                logfire.error("Failed to switch to PDU mode")
+                return False
 
             # Create the PDU
             pdu = messaging.sms.SmsSubmit(phone_number, message)
@@ -812,11 +827,21 @@ class GSMModem:
             smsc_len = int(pdu_str[0:2], 16)
             tpdu_len = (len(pdu_str) - 2 - (smsc_len * 2)) // 2
 
+            # Log for debugging
+            logfire.debug(f"PDU length: {len(pdu_str)}, TPDU length: {tpdu_len}")
+            logfire.debug(f"PDU string: {pdu_str}")
+
             # Send PDU command and data
             cmd = f"AT+CMGS={tpdu_len}"
             response = await self._send_sms_message(cmd, pdu_str)
 
-            return "OK" in response or "+CMGS:" in response
+            # Proper success check
+            success = "+CMGS:" in response and "OK" in response and "ERROR" not in response
+
+            if not success:
+                logfire.error(f"SMS send failed with response: {response}")
+
+            return success
         except Exception as e:
             logfire.error(f"Error sending SMS in PDU mode: {e}", exc_info=e)
             return False
@@ -859,7 +884,6 @@ class GSMModem:
         logfire.info(f"Splitting message into {len(parts)} parts (unicode={is_unicode})")
 
         # Bug fix: Use a proper retry mechanism for failed parts
-        success = True
         max_retries = 2
 
         for i, part in enumerate(parts, 1):
@@ -876,6 +900,6 @@ class GSMModem:
 
             if not sent:
                 logfire.error(f"Failed to send part {i} of {len(parts)} after {max_retries} attempts")
-                success = False
+                return False
 
-        return success
+        return True
