@@ -238,6 +238,8 @@ class GSMModem:
 
         # Run these commands concurrently to speed up initialization
         status = await self.check_modem_status()
+        await self._send_at_command("ATE0")
+        await self._send_at_command("AT+CMEE=1")
         await self._send_at_command('AT+CSCS="UCS2"')
         await self._send_at_command("AT+CNMI=2,1,0,0,0")
 
@@ -723,22 +725,21 @@ class GSMModem:
 
         try:
             while now_utc() < deadline:
-                # Use a fixed timeout for each read attempt
                 chunk = await asyncio.wait_for(self._reader.read(BUFFER_SIZE), 0.5)
                 if chunk:
                     response += chunk.decode(errors="ignore")
 
-                    # Check for success indicators
-                    if "OK" in response and "+CMGS:" in response:
-                        elapsed = (now_utc() - start_time).total_seconds()
-                        logfire.debug(f"Response completed in {elapsed:.2f}s")
+                    if "ERROR" in response:
+                        logfire.debug("Error found in response")
                         break
+
+                    # Give extra time after receiving data
+                    await asyncio.sleep(0.2)
 
                 # Small sleep between reads
                 await asyncio.sleep(0.1)
 
         except TimeoutError:
-            # Timeout occurred during read
             pass
 
         return response.strip()
@@ -836,10 +837,12 @@ class GSMModem:
             response = await self._send_sms_message(cmd, pdu_str)
 
             # Proper success check
-            success = "+CMGS:" in response and "OK" in response and "ERROR" not in response
+            success = "ERROR" not in response
 
             if not success:
                 logfire.error(f"SMS send failed with response: {response}")
+            else:
+                logfire.info("SMS send considered successful (no ERROR in response)")
 
             return success
         except Exception as e:
