@@ -6,7 +6,7 @@ default_language_version:
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v6.0.0
     hooks:
       - id: check-ast
       - id: check-json
@@ -29,23 +29,23 @@ repos:
     hooks:
       - id: taplo-format
   - repo: https://github.com/bwhmather/ssort
-    rev: 0.14.0
+    rev: 0.15.0
     hooks:
       - id: ssort
         entry: ssort
         files: ^src/.*\.py$
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.11.5
+    rev: v0.12.9
     hooks:
       # Run the linter.
-      - id: ruff
+      - id: ruff-check
         files: ^src/.*\.py$
         args: [--fix]
       # Run the formatter.
       - id: ruff-format
         files: ^src/.*\.py$
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.15.0
+    rev: v1.17.1
     hooks:
       - id: mypy
         name: mypy
@@ -56,11 +56,11 @@ repos:
           - types-cachetools
           - types-pytz
   - repo: https://github.com/astral-sh/uv-pre-commit
-    rev: 0.6.14
+    rev: 0.8.12
     hooks:
       - id: uv-lock
   - repo: https://github.com/jag-k/pydantic-settings-export
-    rev: v1.0.1
+    rev: v1.0.3
     hooks:
       - id: pydantic-settings-export
         files: ^src/config\.py$

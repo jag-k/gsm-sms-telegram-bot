@@ -100,14 +100,13 @@ select = [
   'TCH',   # flake8-type-checking
   'PTH',   # flake8-use-pathlib
   # 'D', # pydocstyle
-  'W',    # pycodestyle (warnings)
-  'E',    # pycodestyle (errors)
-  'N',    # pep8-naming
-  'PT',   # flake8-pytest-style
-  'PL',   # pylint
-  'FAST', # FastAPI
-  'TID',  # flake8-tidy-imports
-  'RUF',  # ruff-specific rules
+  'W',   # pycodestyle (warnings)
+  'E',   # pycodestyle (errors)
+  'N',   # pep8-naming
+  'PT',  # flake8-pytest-style
+  'PL',  # pylint
+  'TID', # flake8-tidy-imports
+  'RUF', # ruff-specific rules
 ]
 
 ignore = ['UP040', 'TC001', 'TC002']
@@ -115,10 +114,9 @@ ignore = ['UP040', 'TC001', 'TC002']
 # https://docs.astral.sh/ruff/settings/#extend-per-file-ignores
 [tool.ruff.lint.extend-per-file-ignores]
 '__init__.py' = [
-  'F401',   # {name} imported but unused; consider using importlib.util.find_spec to test for availability
-  'F403',   # from {name} import * used; unable to detect undefined names
-  'F405',   # {name} may be undefined, or defined from star imports
-  'TID252', # Relative imports from parent modules are banned
+  'F401', # {name} imported but unused; consider using importlib.util.find_spec to test for availability
+  'F403', # from {name} import * used; unable to detect undefined names
+  'F405', # {name} may be undefined, or defined from star imports
 ]
 
 # https://docs.astral.sh/ruff/settings/#lintpylint
@@ -127,7 +125,7 @@ max-args = 12
 
 # https://docs.astral.sh/ruff/settings/#lintflake8-tidy-imports
 [tool.ruff.lint.flake8-tidy-imports]
-ban-relative-imports = "all"
+ban-relative-imports = "parents"
 
 # https://docs.astral.sh/ruff/settings/#lintpydocstyle
 [tool.ruff.lint.pydocstyle]

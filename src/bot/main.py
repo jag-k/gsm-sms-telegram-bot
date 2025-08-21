@@ -611,4 +611,10 @@ class SMSBot:
 
         # Set up handlers
         self._setup_handlers()
-        self.application.run_polling(allowed_updates=Update.ALL_TYPES)
+        try:
+            self.application.run_polling(allowed_updates=Update.ALL_TYPES)
+        except TypeError as e:
+            if "does not contain valid pickle data" in str(e):
+                logfire.warning("Failed to load persistence file, deleting this and try to restart the bot")
+                settings.bot.persistence_file.unlink(missing_ok=True)
+                self.run()
