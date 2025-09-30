@@ -11,7 +11,7 @@ license = { text = "MIT" }
 license-files = ["LICEN[CS]E*"]
 keywords = ["telegram-bot", "sms", "sms-messages", "gsm", "gsm-modem"]
 dependencies = [
-  "logfire[system-metrics]>=3.7.0",
+  "logfire[system-metrics,httpx]>=3.7.0",
   "pydantic>=2.10.6",
   "pydantic-extra-types[phonenumbers]>=2.10.2",
   "pydantic-settings>=2.8.1",
@@ -81,7 +81,6 @@ disable_error_code = ["arg-type"]
 
 # https://docs.astral.sh/ruff/
 [tool.ruff]
-target-version = "py313"
 line-length = 120
 extend-exclude = [".idea", ".vscode", ".fleet"]
 src = ["app"]
@@ -89,34 +88,42 @@ src = ["app"]
 # https://docs.astral.sh/ruff/settings/#lint
 [tool.ruff.lint]
 select = [
-  'F', # flake8
-  # 'C90', # mccabe
+  'F',     # flake8
   'I',     # isort
   'UP',    # pyupgrade
   'S',     # flake8-bandit
   'ASYNC', # flake8-async
   'B',     # flake8-bugbear
-  'Q',     # flake8-quotes
-  'TCH',   # flake8-type-checking
-  'PTH',   # flake8-use-pathlib
-  # 'D', # pydocstyle
-  'W',   # pycodestyle (warnings)
-  'E',   # pycodestyle (errors)
-  'N',   # pep8-naming
-  'PT',  # flake8-pytest-style
-  'PL',  # pylint
-  'TID', # flake8-tidy-imports
-  'RUF', # ruff-specific rules
+  'COM',   # flake8-commas
+  'C4',    # flake8-comprehensions
+  'DTZ',   # flake8-datetimez
+  'LOG',   # flake8-logging
+  #'G',     # flake8-logging-format
+  'INP',  # flake8-no-pep420
+  'PIE',  # flake8-pie
+  'SIM',  # flake8-simplify
+  'TID',  # flake8-tidy-imports
+  'Q',    # flake8-quotes
+  'PTH',  # flake8-use-pathlib
+  'W',    # pycodestyle (warnings)
+  'E',    # pycodestyle (errors)
+  'N',    # pep8-naming
+  'PT',   # flake8-pytest-style
+  'PL',   # pylint
+  'FURB', # refurb
+  'RUF',  # ruff-specific rules
+  #'TRY',   # tryceratops
 ]
-
-ignore = ['UP040', 'TC001', 'TC002']
 
 # https://docs.astral.sh/ruff/settings/#extend-per-file-ignores
 [tool.ruff.lint.extend-per-file-ignores]
 '__init__.py' = [
-  'F401', # {name} imported but unused; consider using importlib.util.find_spec to test for availability
-  'F403', # from {name} import * used; unable to detect undefined names
-  'F405', # {name} may be undefined, or defined from star imports
+  'F401',   # {name} imported but unused; consider using importlib.util.find_spec to test for availability
+  'F403',   # from {name} import * used; unable to detect undefined names
+  'F405',   # {name} may be undefined, or defined from star imports
+  'TID252', # Relative imports from parent modules are banned
+  #'TRY002', # Create your own exception
+  #'TRY003', # Consider moving this statement to an else block
 ]
 
 # https://docs.astral.sh/ruff/settings/#lintpylint
@@ -147,7 +154,7 @@ section-order = [
 lines-after-imports = 2
 lines-between-types = 1
 
-
+# https://github.com/jag-k/pydantic-settings-export#configuration
 [tool.pydantic_settings_export]
 project_dir = "."
 default_settings = ["src.config:Settings"]

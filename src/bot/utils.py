@@ -1,9 +1,11 @@
 import asyncio
+import logging
 import re
 
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
+from typing import Any
 
-import logfire
 import phonenumbers
 
 from config import get_settings
@@ -15,9 +17,14 @@ from telegram.ext import ContextTypes
 
 settings = get_settings()
 
+logger = logging.getLogger(__name__)
 
-async def retry_telegram_api[ReturnType: any, **P](
-    func: Callable[P, Awaitable[ReturnType]], *args: P.args, max_retries: int = 3, **kwargs: P.kwargs
+
+async def retry_telegram_api[ReturnType: Any, **P](
+    func: Callable[P, Awaitable[ReturnType]],
+    *args: P.args,
+    max_retries: int = 3,
+    **kwargs: P.kwargs,
 ) -> ReturnType | None:
     """
     Retry a Telegram API call with exponential backoff.
@@ -26,6 +33,7 @@ async def retry_telegram_api[ReturnType: any, **P](
     :param max_retries: Maximum number of retries
     :return: The result of the function call
     """
+    wait_time: float
     retries: int = 0
     last_exception: Exception | None = None
 
@@ -35,22 +43,24 @@ async def retry_telegram_api[ReturnType: any, **P](
         except (TimedOut, NetworkError) as e:
             last_exception = e
             retries += 1
-            wait_time = 2**retries  # Exponential backoff
-            logfire.warning(
-                f"Telegram API error: {e}. Retrying in {wait_time} seconds... (Attempt {retries}/{max_retries})"
+            wait_time = 2**retries
+            logger.warning(
+                f"Telegram API error: {e}. Retrying in {wait_time} seconds... (Attempt {retries}/{max_retries})",
             )
             await asyncio.sleep(wait_time)
         except RetryAfter as e:
             last_exception = e
             # Use the time specified by Telegram
-            wait_time = e.retry_after
-            logfire.warning(f"Telegram API rate limit. Retrying in {wait_time} seconds...")
+            r = e.retry_after
+            wait_time = r.total_seconds() if isinstance(r, timedelta) else r
+            logger.warning(f"Telegram API rate limit. Retrying in {wait_time} seconds...")
             await asyncio.sleep(wait_time)
 
     # If we've exhausted retries, raise the last exception
     if last_exception:
-        logfire.error(f"Failed after {max_retries} retries: {last_exception}")
+        logger.error(f"Failed after {max_retries} retries: {last_exception}")
         raise last_exception
+    return None
 
 
 def is_valid_phone_number(phone_number: str) -> bool:
@@ -134,9 +144,9 @@ async def unauthorized_response(update: Update) -> None:
     await msg.reply_text("You are not authorized to use this bot.")
 
     if user:
-        logfire.warning(f"Unauthorized access attempt by user {user.id} ({user.username})")
+        logger.warning(f"Unauthorized access attempt by user {user.id} ({user.username})")
         return
-    logfire.warning("Unauthorized access attempt by unknown user")
+    logger.warning("Unauthorized access attempt by unknown user")
 
 
 async def check_access(update: Update) -> bool:
@@ -149,6 +159,7 @@ async def check_access(update: Update) -> bool:
     return True
 
 
+# noinspection PyTypeHints
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Handle errors in the telegram-bot-python library.
@@ -156,7 +167,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     :param update: The update that caused the error.
     :param context: The context for this handler.
     """
-    logfire.error("Exception while handling an update:", exc_info=context.error)
+    logger.error("Exception while handling an update:", exc_info=context.error)
 
     # Get the error message
     error_message = str(context.error)

@@ -3,7 +3,7 @@ import re
 
 SMS_HEADER_REGEX = re.compile(
     r"\+CMGL: (?P<id>\d+),"
-    r'"(?P<status>[^"]*)",("(?P<sender>[^"]*)")?,("(?P<recipient>[^"]*)")?,("(?P<timestamp>[^"]*)")?'
+    r'"(?P<status>[^"]*)",("(?P<sender>[^"]*)")?,("(?P<recipient>[^"]*)")?,("(?P<timestamp>[^"]*)")?',
 )
 CONTACT_REGEX = re.compile(r'\+CPBR: \d+,"(?P<number>[^"]+)",\d+,"(?P<name>[^"]+)"')
 SIM_RANGE_REGEX = re.compile(r"\+CPBR: \((\d+)-(\d+)\)")
@@ -30,7 +30,7 @@ SHORT_POLL_DELAY = 0.1  # Short delay for polling operations
 # Real-time SMS monitoring settings
 DEFAULT_SMS_CHECK_INTERVAL = 2.0  # Default interval (seconds) to check for new SMS
 ACTIVE_MODE_TIMEOUT = 10  # Seconds to stay in active mode after message activity
-INACTIVE_MODE_THRESHOLD = 30  # Seconds of inactivity before increasing interval
+INACTIVE_MODE_THRESHOLD = 30  # Seconds of inactivity before an increasing interval
 MIN_SLEEP_INTERVAL = 0.1  # Minimum sleep interval for monitoring loop
 SIGNIFICANT_PROCESSING_TIME = 1.0  # Log warning if processing takes longer than this
 OTP_KEYWORDS = ["code", "код", "otp", "пароль", "password"]  # Keywords for identifying OTP messages

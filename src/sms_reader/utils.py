@@ -1,4 +1,5 @@
 import datetime
+import logging
 import string
 
 from typing import TypedDict
@@ -7,6 +8,9 @@ import logfire
 import messaging.sms
 
 from sms_reader.models import SMSMessage, UDHInfo
+
+
+logger = logging.getLogger(__name__)
 
 
 class ParseTextModeResponse(TypedDict):
@@ -31,7 +35,7 @@ def parse_text_mode_response(response_text: str) -> list[ParseTextModeResponse]:
                 sms_entries.append(current_entry)
 
             # Create a new entry
-            current_entry = {"header": line, "text": ""}
+            current_entry = ParseTextModeResponse(header=line, text="")
         elif current_entry:
             # If we have a current entry, add text to it
             if current_entry["text"]:
@@ -55,7 +59,7 @@ def decode_ucs2_text(text: str) -> str:
         try:
             return bytearray.fromhex(text).decode("utf-16-be")
         except Exception as e:
-            logfire.error(f"Failed to decode UCS2 text: {e}", exc_info=e)
+            logger.error(f"Failed to decode UCS2 text: {e}", exc_info=e)
 
     return text
 
@@ -91,20 +95,18 @@ def parse_sms_timestamp(timestamp: str | datetime.datetime | None) -> datetime.d
             tz_str = "00"
 
         # Parse the datetime part
-        dt = datetime.datetime.strptime(dt_str, "%y/%m/%d,%H:%M:%S")
+        dt = datetime.datetime.strptime(dt_str, "%y/%m/%d,%H:%M:%S").replace(tzinfo=datetime.UTC)
 
         # Add timezone if present
         if tz_sign != 0:
-            # Convert quarter-hours to hours (e.g., 04 = 1 hour)
+            # Convert quarter-hours to hours (e.g. 04 = 1 hour)
             tz_hours = int(tz_str) // 4
             tz = datetime.timezone(datetime.timedelta(hours=tz_sign * tz_hours))
             dt = dt.replace(tzinfo=tz)
-        else:
-            dt = dt.replace(tzinfo=datetime.UTC)
 
         return dt
     except Exception as e:
-        logfire.error(f"Error parsing timestamp '{timestamp}': {e}", exc_info=e)
+        logger.error(f"Error parsing timestamp '{timestamp}': {e}", exc_info=e)
         return datetime.datetime.now(datetime.UTC)
 
 
@@ -140,7 +142,7 @@ def decode_pdu(sms_index: str, pdu_data: str) -> SMSMessage | None:
         udh_info = None
         if hasattr(sms, "udh") and sms.udh:
             # Log UDH information for debugging
-            logfire.debug(f"UDH: {sms.udh}")
+            logger.debug(f"UDH: {sms.udh}")
 
             # Check for concatenation information
             if hasattr(sms.udh, "concat") and sms.udh.concat:
@@ -149,8 +151,9 @@ def decode_pdu(sms_index: str, pdu_data: str) -> SMSMessage | None:
                     total_parts=sms.udh.concat.cnt,  # Total number of parts
                     current_part=sms.udh.concat.seq,  # Current part number (sequence)
                 )
-                logfire.debug(
-                    f"Found multipart SMS: part {udh_info.current_part}/{udh_info.total_parts}, ref: {udh_info.ref_num}"
+                logger.debug(
+                    f"Found multipart SMS: part {udh_info.current_part}/{udh_info.total_parts}, "
+                    f"ref: {udh_info.ref_num}",
                 )
 
         # Extract additional information from the PDU data directly
@@ -174,7 +177,7 @@ def decode_pdu(sms_index: str, pdu_data: str) -> SMSMessage | None:
             if (sender_type & 0x70) == 0x50:  # noqa: PLR2004
                 is_alphanumeric = True
         except Exception as e:
-            logfire.debug(f"Error parsing PDU structure: {e}")
+            logger.debug(f"Error parsing PDU structure: {e}")
 
         # Return structured SMS information
         return SMSMessage(
@@ -188,5 +191,5 @@ def decode_pdu(sms_index: str, pdu_data: str) -> SMSMessage | None:
         )
 
     except Exception as e:
-        logfire.error(f"Failed to decode PDU data: {e}", exc_info=e)
+        logger.error(f"Failed to decode PDU data: {e}", exc_info=e)
         return None

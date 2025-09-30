@@ -27,6 +27,7 @@ PERSISTENCE_FILE_NAME = "sms_bot_data.pickle"
 _project_info = tomllib.loads(Path(BASE_DIR, "pyproject.toml").read_text())["project"]
 PROJECT_NAME = _project_info["name"]
 PROJECT_VERSION = _project_info["version"]
+PROJECT_REPO = _project_info.get("urls", {}).get("Homepage", "")
 
 
 def is_running_in_docker() -> bool:
@@ -118,6 +119,7 @@ def configure_logfire(settings: Settings) -> None:
         send_to_logfire="if-token-present",
         token=settings.logfire.token,
         service_name=PROJECT_NAME,
+        min_level=settings.log_level,
         service_version=PROJECT_VERSION,
         environment=settings.logfire.environment,
         console=logfire.ConsoleOptions(
@@ -125,15 +127,19 @@ def configure_logfire(settings: Settings) -> None:
             min_log_level=settings.log_level,
         ),
         code_source=logfire.CodeSource(
-            repository="https://github.com/jag-k/gsm-sms-telegram-bot",
+            repository=PROJECT_REPO,
             revision=settings.logfire.revision,
-        ),
+        )
+        if PROJECT_REPO
+        else None,
     )
     logfire.instrument_system_metrics()
+    logfire.instrument_httpx()
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    # noinspection PyArgumentList
     settings = Settings()
     configure_logfire(settings)
     return settings
