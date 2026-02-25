@@ -18,7 +18,7 @@ dependencies = [
   "pyserial>=3.5",
   "pyserial-asyncio>=0.6",
   "python-messaging>=0.5.13",
-  "python-telegram-bot>=21.11.1",
+  "python-telegram-bot>=22.6",
 ]
 classifiers = [
   "Development Status :: 3 - Alpha",
