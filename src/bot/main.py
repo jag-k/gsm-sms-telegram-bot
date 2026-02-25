@@ -15,10 +15,11 @@ from bot.utils import (
 )
 from config import get_settings
 from sms_reader import GSMModem, SMSMessage
-from telegram import BotCommand, Message, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
@@ -342,6 +343,7 @@ class SMSBot:
             BotCommand("start", "Show recent SMS messages"),
             BotCommand("send", "Send an SMS message"),
             BotCommand("clear", "Clear message history"),
+            BotCommand("rebuild", "Rebuild threads from history"),
         ]
 
         # Add the cancel command only when needed
@@ -495,6 +497,163 @@ class SMSBot:
         await self.clear_storage()
         await update.message.reply_text("🧹 Message history cleared!")
         logger.info("Message history cleared successfully")
+
+    @logfire.instrument("Command: /rebuild")
+    async def cmd_rebuild(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle the /rebuild command — show confirmation before rebuilding threads."""
+        logger.info("Processing /rebuild command")
+
+        if not await self._check_access(update):
+            return
+        if not update.message:
+            return
+
+        if not await self._are_topics_enabled():
+            await update.message.reply_text("❌ Topics are not enabled for this chat. Cannot rebuild threads.")
+            return
+
+        messages = await self.get_sms_messages()
+        if not messages:
+            await update.message.reply_text("No SMS messages in history to rebuild.")
+            return
+
+        # Group messages by sender (skip outgoing with sender="Me")
+        senders: dict[str, list[SMSMessage]] = {}
+        for msg in messages:
+            if msg.sender == "Me":
+                continue
+            normalized = self._normalize_recipient(msg.sender)
+            senders.setdefault(normalized, []).append(msg)
+
+        if not senders:
+            await update.message.reply_text("No incoming SMS messages in history to rebuild.")
+            return
+
+        total_msgs = sum(len(msgs) for msgs in senders.values())
+        text = (
+            f"🔄 <b>Rebuild threads</b>\n\n"
+            f"This will create forum topics for each sender and re-send stored messages into them.\n\n"
+            f"• <b>Senders:</b> {len(senders)}\n"
+            f"• <b>Messages:</b> {total_msgs}\n\n"
+            f"Senders with existing threads will be skipped entirely.\n"
+            f"Continue?"
+        )
+
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("✅ Yes, rebuild", callback_data="rebuild_confirm"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="rebuild_cancel"),
+                ],
+            ],
+        )
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+
+    @logfire.instrument("Execute Rebuild")
+    async def _execute_rebuild(self) -> str:
+        """
+        Execute the actual thread rebuild process.
+
+        :return: HTML-formatted result summary.
+        """
+        if not await self._are_topics_enabled():
+            return "❌ Topics are not enabled for this chat. Cannot rebuild threads."
+
+        if not self.application:
+            return "❌ Application not initialized."
+
+        messages = await self.get_sms_messages()
+
+        # Group messages by normalized sender, skip outgoing
+        senders: dict[str, list[SMSMessage]] = {}
+        for msg in messages:
+            if msg.sender == "Me":
+                continue
+            normalized = self._normalize_recipient(msg.sender)
+            senders.setdefault(normalized, []).append(msg)
+
+        created_count = 0
+        skipped_count = 0
+        sent_count = 0
+        failed_count = 0
+
+        for normalized_phone, sender_msgs in senders.items():
+            # Check if thread already exists
+            existing_thread_id: int | None = None
+            bot_data = self.application.bot_data
+            async with self.bot_data_lock:
+                phone_threads: dict[str, int] = bot_data.setdefault("phone_threads", {})
+                existing_thread_id = phone_threads.get(normalized_phone)
+
+            if existing_thread_id is not None and existing_thread_id != _CREATING_THREAD_SENTINEL:
+                skipped_count += 1
+                continue
+
+            # Create a new thread
+            thread_id = await self._get_or_create_thread(normalized_phone)
+            if thread_id is None:
+                failed_count += len(sender_msgs)
+                continue
+
+            created_count += 1
+
+            # Sort messages by timestamp and send them
+            sorted_msgs = sorted(sender_msgs, key=lambda m: m.timestamp)
+            for msg in sorted_msgs:
+                message_text = msg.to_html()
+                try:
+                    await retry_telegram_api(
+                        self.application.bot.send_message,
+                        chat_id=settings.bot.allowed_user_id,
+                        text=message_text,
+                        parse_mode=ParseMode.HTML,
+                        message_thread_id=thread_id,
+                    )
+                    sent_count += 1
+                    # Small delay to avoid rate limiting
+                    await asyncio.sleep(0.5)
+                except Exception as e:
+                    logger.warning(f"Failed to send rebuild message for {normalized_phone}: {e}")
+                    failed_count += 1
+
+        result = (
+            f"✅ <b>Rebuild complete</b>\n\n"
+            f"• <b>Threads created:</b> {created_count}\n"
+            f"• <b>Threads skipped (already exist):</b> {skipped_count}\n"
+            f"• <b>Messages sent:</b> {sent_count}\n"
+        )
+        if failed_count:
+            result += f"• <b>Failed:</b> {failed_count}\n"
+
+        logger.info(f"Rebuild complete: {created_count} created, {skipped_count} skipped, {sent_count} sent")
+        return result
+
+    @logfire.instrument("Callback: Rebuild")
+    async def handle_rebuild_callback(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle inline keyboard callback for /rebuild confirmation."""
+        query = update.callback_query
+        if not query or not query.data:
+            return
+
+        user = update.effective_user
+        if not user or user.id != settings.bot.allowed_user_id:
+            await query.answer("You are not authorized.", show_alert=True)
+            return
+
+        await query.answer()
+
+        if query.data == "rebuild_cancel":
+            await query.edit_message_text("🔄 Rebuild cancelled.")
+            return
+
+        if query.data != "rebuild_confirm":
+            return
+
+        await query.edit_message_text("🔄 Rebuilding threads, please wait...")
+        result = await self._execute_rebuild()
+
+        if isinstance(query.message, Message):
+            await query.message.reply_text(result, parse_mode=ParseMode.HTML)
 
     @logfire.instrument("Command: /send")
     async def cmd_send(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -907,6 +1066,7 @@ class SMSBot:
         # Command handlers
         app.add_handler(CommandHandler("start", self.cmd_start))
         app.add_handler(CommandHandler("clear", self.cmd_clear))
+        app.add_handler(CommandHandler("rebuild", self.cmd_rebuild))
 
         # Create a conversation handler for /send command
         send_conv_handler = ConversationHandler(
@@ -928,6 +1088,9 @@ class SMSBot:
 
         # Handle direct contact shares (outside `/send` command)
         app.add_handler(MessageHandler(filters.CONTACT & ~filters.COMMAND, self.handle_direct_contact))
+
+        # Handle /rebuild confirmation callbacks
+        app.add_handler(CallbackQueryHandler(self.handle_rebuild_callback, pattern=r"^rebuild_"))
 
         # Handle messages inside a thread (separate group so it doesn't block other handlers)
         in_thread = _InThreadFilter()
