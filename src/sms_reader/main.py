@@ -98,6 +98,27 @@ class GSMModem:
             logger.error(f"Failed to connect to modem: {e}", exc_info=e)
             return False
 
+    @logfire.instrument("Setup: Wait for Modem Ready")
+    async def _wait_for_modem_ready(self, max_attempts: int = 5, retry_interval: float = 1.0) -> bool:
+        """Poll the modem with AT until it responds, to handle SIM800C startup delay.
+
+        SIM800C is silent for 2-5 seconds after the serial port appears.
+        Sending AT commands before it is ready causes them to be lost.
+
+        :param max_attempts: Maximum number of AT poll attempts
+        :param retry_interval: Seconds to wait between attempts
+        :return: True if modem responded with OK, False if all attempts failed
+        """
+        for attempt in range(1, max_attempts + 1):
+            logger.debug(f"Waiting for modem ready (attempt {attempt}/{max_attempts})")
+            response = await self._send_at_command("AT", response_wait_time=1.0)
+            if response.success:
+                logger.info(f"Modem ready after {attempt} attempt(s)")
+                return True
+            await asyncio.sleep(retry_interval)
+        logger.error(f"Modem did not become ready after {max_attempts} attempts")
+        return False
+
     async def _clear_input_buffer(self, wait_timeout: float = MIN_SIGNIFICANT_DELAY) -> None:
         """Clear any pending data in the input buffer.
 
@@ -237,12 +258,23 @@ class GSMModem:
             logger.error("Failed to connect to modem")
             return False
 
-        # Create tasks for independent operations that can run in parallel
+        # SIM800C takes 2-5s to become responsive after the serial port appears.
+        # Poll with AT until the modem acknowledges, then flush the startup
+        # unsolicited messages ("Call Ready", "SMS Ready") from the buffer.
+        logger.info("Waiting for modem to become ready")
+        if not await self._wait_for_modem_ready():
+            logger.error("Modem did not respond — aborting setup")
+            return False
+
+        logger.info("Flushing modem startup messages from buffer")
+        await self._clear_input_buffer(wait_timeout=2.0)
+
         logger.info("Initializing modem - checking status and sending basic commands")
 
-        # Run these commands concurrently to speed up initialization
-        status = await self.check_modem_status()
+        # Disable echo BEFORE checking status so that echo does not corrupt
+        # the AT+CPIN?/AT+CREG? responses used by check_modem_status().
         await self._send_at_command("ATE0")
+        status = await self.check_modem_status()
         await self._send_at_command("AT+CMEE=1")
         await self._send_at_command('AT+CSCS="UCS2"')
         await self._send_at_command("AT+CNMI=2,1,0,0,0")
