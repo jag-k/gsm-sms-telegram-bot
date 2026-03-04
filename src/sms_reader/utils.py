@@ -183,7 +183,7 @@ def decode_pdu(sms_index: str, pdu_data: str) -> SMSMessage | None:
         return SMSMessage(
             index=sms_index,
             sender=sender or "Unknown",
-            text=text,
+            text=text or "",
             timestamp=timestamp,
             is_alphanumeric=is_alphanumeric,
             sender_type=sender_type,

@@ -1070,8 +1070,8 @@ class SMSBot:
 
         # Create a conversation handler for /send command
         send_conv_handler = ConversationHandler(
-            entry_points=[CommandHandler("send", self.cmd_send)],
-            states={
+            entry_points=[CommandHandler("send", self.cmd_send)],  # ty: ignore[invalid-argument-type]
+            states={  # ty: ignore[invalid-argument-type]
                 WAITING_FOR_NUMBER: [
                     MessageHandler(filters.CONTACT, self.handle_contact),
                     MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_phone_number),
@@ -1080,7 +1080,7 @@ class SMSBot:
                     MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message_to_send),
                 ],
             },
-            fallbacks=[CommandHandler("cancel", self.cancel_send)],
+            fallbacks=[CommandHandler("cancel", self.cancel_send)],  # ty: ignore[invalid-argument-type]
             name="send_conversation",
             persistent=True,
         )

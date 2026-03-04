@@ -24,18 +24,18 @@ repos:
         exclude: data/
       - id: detect-private-key
         always_run: true
-  - repo: https://github.com/ComPWA/taplo-pre-commit  # TOML formatter
+  - repo: https://github.com/ComPWA/taplo-pre-commit # TOML formatter
     rev: v0.9.3
     hooks:
       - id: taplo-format
   - repo: https://github.com/bwhmather/ssort
-    rev: 0.15.0
+    rev: 0.16.0
     hooks:
       - id: ssort
         entry: ssort
         files: ^src/.*\.py$
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.13.2
+    rev: v0.15.4
     hooks:
       # Run the linter.
       - id: ruff-check
@@ -44,19 +44,15 @@ repos:
       # Run the formatter.
       - id: ruff-format
         files: ^src/.*\.py$
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.18.2
+  - repo: local
     hooks:
-      - id: mypy
-        name: mypy
+      - id: ty-check
+        name: ty
+        language: system
+        entry: uv run ty check
         files: ^src/.*\.py$
-        args: [--install-types, --non-interactive, --config-file=pyproject.toml]
-        additional_dependencies:
-          - types-PyYAML
-          - types-cachetools
-          - types-pytz
   - repo: https://github.com/astral-sh/uv-pre-commit
-    rev: 0.8.22
+    rev: 0.10.7
     hooks:
       - id: uv-lock
   - repo: https://github.com/jag-k/pydantic-settings-export

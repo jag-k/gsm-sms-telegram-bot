@@ -19,25 +19,26 @@ settings = get_settings()
 
 logger = logging.getLogger(__name__)
 
+_MAX_RETRIES = 3
+
 
 async def retry_telegram_api[ReturnType: Any, **P](
     func: Callable[P, Awaitable[ReturnType]],
+    /,
     *args: P.args,
-    max_retries: int = 3,
     **kwargs: P.kwargs,
 ) -> ReturnType | None:
     """
     Retry a Telegram API call with exponential backoff.
 
     :param func: The async function to call
-    :param max_retries: Maximum number of retries
     :return: The result of the function call
     """
     wait_time: float
     retries: int = 0
     last_exception: Exception | None = None
 
-    while retries < max_retries:
+    while retries < _MAX_RETRIES:
         try:
             return await func(*args, **kwargs)
         except (TimedOut, NetworkError) as e:
@@ -45,7 +46,7 @@ async def retry_telegram_api[ReturnType: Any, **P](
             retries += 1
             wait_time = 2**retries
             logger.warning(
-                f"Telegram API error: {e}. Retrying in {wait_time} seconds... (Attempt {retries}/{max_retries})",
+                f"Telegram API error: {e}. Retrying in {wait_time} seconds... (Attempt {retries}/{_MAX_RETRIES})",
             )
             await asyncio.sleep(wait_time)
         except RetryAfter as e:
@@ -58,7 +59,7 @@ async def retry_telegram_api[ReturnType: Any, **P](
 
     # If we've exhausted retries, raise the last exception
     if last_exception:
-        logger.error(f"Failed after {max_retries} retries: {last_exception}")
+        logger.error(f"Failed after {_MAX_RETRIES} retries: {last_exception}")
         raise last_exception
     return None
 
