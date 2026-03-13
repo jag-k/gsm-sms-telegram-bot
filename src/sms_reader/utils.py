@@ -1,6 +1,5 @@
 import datetime
 import logging
-import string
 
 from typing import TypedDict
 
@@ -52,14 +51,15 @@ def parse_text_mode_response(response_text: str) -> list[ParseTextModeResponse]:
 def decode_ucs2_text(text: str) -> str:
     """Decode UCS2 (hexadecimal) text to Unicode string.
 
+    WARN: You MUST check that modem using UCS2 encoding before calling this function!
+
     :param text: Hexadecimal string to decode
-    :return: Decoded text or original text if not in UCS2 format
+    :return: Decoded text or original text if UCS2 decoding is not applicable
     """
-    if all(c in string.hexdigits for c in text) and len(text) % 4 == 0:
-        try:
-            return bytearray.fromhex(text).decode("utf-16-be")
-        except Exception as e:
-            logger.error(f"Failed to decode UCS2 text: {e}", exc_info=e)
+    try:
+        return bytearray.fromhex(text).decode("utf-16-be")
+    except Exception as e:
+        logger.error(f"Failed to decode UCS2 text: {e}", exc_info=e)
 
     return text
 

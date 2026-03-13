@@ -1,4 +1,4 @@
-"""Extract project metadata from pyproject.toml and write to GITHUB_OUTPUT."""
+"""Extract project metadata from pyproject.toml and write to GITHUB_OUTPUT."""  # noqa: INP001
 
 import os
 import re
