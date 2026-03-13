@@ -7,7 +7,7 @@ env:
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
     branches:
       - main
   workflow_dispatch:
@@ -38,16 +38,11 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v7
 
       - name: Get info
         id: info
-        run: |
-          json_output=$(uvx --quiet hatch --quiet project metadata)
-          echo "version=$(echo $json_output | jq -r '.version')" >> $GITHUB_OUTPUT
-          echo "license=$(echo $json_output | jq -r '.license')" >> $GITHUB_OUTPUT
-          echo "description=$(echo $json_output | jq -r '.description')" >> $GITHUB_OUTPUT
-          echo "created_at=$(date +%Y-%m-%dT%H:%M:%S.%NZ)" >> $GITHUB_OUTPUT
+        run: uv run .github/scripts/get_project_info.py
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
@@ -56,8 +51,8 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.info.outputs.version }}
+            ${{ steps.info.outputs.is_prerelease != 'true' && format('{0}/{1}:latest', env.REGISTRY, env.IMAGE_NAME) || '' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |

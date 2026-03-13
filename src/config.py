@@ -37,7 +37,7 @@ def is_running_in_docker() -> bool:
 
     # Check for the presence of 'docker' in the cgroup file
     try:
-        with Path("/proc/selogfire/cgroup").open() as f:
+        with Path("/proc/self/cgroup").open() as f:
             for line in f:
                 if "docker" in line:
                     return True

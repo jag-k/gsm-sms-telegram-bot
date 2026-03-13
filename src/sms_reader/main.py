@@ -423,6 +423,7 @@ class GSMModem:
         :return: True if the message was processed, False otherwise (e.g. not a UDH message)
         """
         udh_info = sms.udh_info
+        assert udh_info is not None, "udh_info must be set before calling _process_udh_message"  # noqa: S101
         key = f"{sms.sender}_{udh_info.ref_num}"
 
         # Initialize a new pending message if needed
@@ -518,7 +519,7 @@ class GSMModem:
                     continue
 
                 try:
-                    sms_index = line.split(",")[0].split(":")[1].strip()
+                    sms_index = line.split(",", maxsplit=1)[0].split(":", maxsplit=1)[1].strip()
                     pdu_data = lines[i + 1].strip()
 
                     if not pdu_data:
