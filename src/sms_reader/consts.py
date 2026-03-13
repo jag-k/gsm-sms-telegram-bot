@@ -33,4 +33,14 @@ ACTIVE_MODE_TIMEOUT = 10  # Seconds to stay in active mode after message activit
 INACTIVE_MODE_THRESHOLD = 30  # Seconds of inactivity before an increasing interval
 MIN_SLEEP_INTERVAL = 0.1  # Minimum sleep interval for monitoring loop
 SIGNIFICANT_PROCESSING_TIME = 1.0  # Log warning if processing takes longer than this
-OTP_KEYWORDS = ["code", "код", "otp", "пароль", "password"]  # Keywords for identifying OTP messages
+
+# Watchdog settings
+MODEM_WATCHDOG_INTERVAL = 300  # Seconds between AT ping health checks (5 minutes)
+MODEM_WATCHDOG_TIMEOUT = 10.0  # Seconds to wait for AT response before declaring modem dead
+
+# Buffer clearing settings
+BUFFER_CLEAR_MAX_READS = 16  # Maximum read attempts when flushing the input buffer
+
+# Network registration settings
+NETWORK_REGISTRATION_RETRIES = 5  # Number of attempts to wait for network registration
+NETWORK_REGISTRATION_RETRY_DELAY = 5.0  # Seconds between network registration checks

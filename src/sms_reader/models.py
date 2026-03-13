@@ -167,14 +167,16 @@ class PendingMessage:
         parts_text = [part.text for part in self.parts]
         merged_text = "".join(parts_text)
 
-        # Create a new message with merged content
+        # Use the first part (after sorting) as the base for metadata so that
+        # arrival order does not affect the index or timestamp.
+        first_part = self.parts[0]
         sms = SMSMessage(
-            index=f"{self.message.index}_merged_{len(self.parts)}",
-            sender=self.message.sender,
+            index=f"{first_part.index}_merged_{len(self.parts)}",
+            sender=first_part.sender,
             text=merged_text,
-            timestamp=self.message.timestamp,
-            is_alphanumeric=self.message.is_alphanumeric,
-            sender_type=self.message.sender_type,
+            timestamp=first_part.timestamp,
+            is_alphanumeric=first_part.is_alphanumeric,
+            sender_type=first_part.sender_type,
             udh_info=None,  # Clear UDH info as this is a merged message
         )
 
@@ -195,4 +197,4 @@ class ATResponse:
     @property
     def success(self) -> bool:
         """Check if the response indicates success."""
-        return "OK" in self.raw_response or not self.error_message
+        return "OK" in self.raw_response and not self.error_message

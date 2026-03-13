@@ -276,6 +276,14 @@ class SMSBot:
         except Exception as e:
             logger.error(f"Failed to forward SMS to Telegram: {e}", exc_info=e)
 
+    async def _sms_consumer(self) -> None:
+        """Consume SMS messages from the modem queue and forward them to Telegram."""
+        if not self.modem:
+            logger.error("SMS consumer started without a modem instance")
+            return
+        async for sms in self.modem:
+            await self.on_sms_received(sms)
+
     @logfire.instrument("Get SMS")
     async def get_sms_messages(self) -> list[SMSMessage]:
         """
@@ -1046,14 +1054,19 @@ class SMSBot:
                     raise RuntimeError("Failed to set up GSM modem")
 
                 logger.info("GSM modem initialized successfully")
-            # Start SMS monitoring in a separate task
-            task = asyncio.create_task(
-                self.modem.run_sms_monitoring(
-                    callback=self.on_sms_received,
-                    lock=self.modem_lock,
-                ),
+            # Start SMS monitoring (producer) in a separate task
+            monitor_task = asyncio.create_task(
+                self.modem.run_sms_monitoring(lock=self.modem_lock),
+                name="sms_monitoring",
             )
-            self.shutdown_tasks.append(task)
+            self.shutdown_tasks.append(monitor_task)
+
+            # Start SMS consumer in a separate task
+            consumer_task = asyncio.create_task(
+                self._sms_consumer(),
+                name="sms_consumer",
+            )
+            self.shutdown_tasks.append(consumer_task)
 
         except Exception as e:
             logger.error(f"Error initializing modem: {e}", exc_info=e)
