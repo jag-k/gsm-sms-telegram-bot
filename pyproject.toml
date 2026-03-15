@@ -1,6 +1,6 @@
 [project]
 name = "gsm-sms-telegram-bot"
-version = "0.2.0b1"
+version = "0.2.0"
 description = "Send and receive SMS via Telegram using a GSM modem."
 authors = [
   { name = "jag_k", email = "30597878+jag-k@users.noreply.github.com" },
@@ -83,7 +83,7 @@ select = [
   'PL',   # pylint
   'FURB', # refurb
   'RUF',  # ruff-specific rules
-  #'TRY',   # tryceratops
+  #'TRY', # tryceratops
 ]
 
 # https://docs.astral.sh/ruff/settings/#extend-per-file-ignores
