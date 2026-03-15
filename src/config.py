@@ -110,10 +110,6 @@ class Settings(BaseSettings):
 def configure_logfire(settings: Settings) -> None:
     """Configure Logfire and logging based on the provided settings."""
 
-    logging.basicConfig(handlers=[logfire.LogfireLoggingHandler(_default_log_level)])
-    logging.getLogger("bot").setLevel(settings.log_level.upper())
-    logging.getLogger("sms_reader").setLevel(settings.log_level.upper())
-
     logfire.configure(
         local=settings.logfire.environment == "local",
         send_to_logfire="if-token-present",
@@ -122,10 +118,7 @@ def configure_logfire(settings: Settings) -> None:
         min_level=settings.log_level,
         service_version=PROJECT_VERSION,
         environment=settings.logfire.environment,
-        console=logfire.ConsoleOptions(
-            verbose=True,
-            min_log_level=settings.log_level,
-        ),
+        console=False,
         code_source=logfire.CodeSource(
             repository=PROJECT_REPO,
             revision=settings.logfire.revision,
@@ -133,6 +126,11 @@ def configure_logfire(settings: Settings) -> None:
         if PROJECT_REPO
         else None,
     )
+
+    logging.getLogger().addHandler(logfire.LogfireLoggingHandler())
+    logging.getLogger("bot").setLevel(settings.log_level.upper())
+    logging.getLogger("sms_reader").setLevel(settings.log_level.upper())
+
     logfire.instrument_system_metrics()
     logfire.instrument_httpx()
 
