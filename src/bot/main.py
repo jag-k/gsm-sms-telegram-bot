@@ -4,6 +4,7 @@ import logging
 import re
 
 import logfire
+import telegram
 
 from bot.utils import (
     error_handler,
@@ -92,13 +93,14 @@ class SMSBot:
         self.topics_enabled: bool | None = None
         self.shutdown_tasks: list[asyncio.Task] = []
 
-    async def _are_topics_enabled(self) -> bool:
+    async def _are_topics_enabled(self, *, force_check: bool = False) -> bool:
         """
         Check if topics are enabled for the target chat.
 
+        :param force_check: If True, bypass the cached result and re-query the Telegram API.
         :return: True if topics are enabled, False otherwise.
         """
-        if self.topics_enabled is not None:
+        if not force_check and self.topics_enabled is not None:
             return self.topics_enabled
         if not self.application:
             logger.error("Cannot check topics: application not initialized")
@@ -106,7 +108,7 @@ class SMSBot:
             return False
 
         try:
-            chat = await retry_telegram_api(
+            chat: telegram.ChatFullInfo | None = await retry_telegram_api(
                 self.application.bot.get_chat,
                 chat_id=settings.bot.allowed_user_id,
             )
@@ -120,13 +122,19 @@ class SMSBot:
             self.topics_enabled = False
             return False
 
-        is_forum = getattr(chat, "is_forum", None)
-        topics_enabled = bool(getattr(chat, "has_topics_enabled", False)) if is_forum is None else bool(is_forum)
+        is_forum: bool | None = chat.is_forum
+        topics_enabled = bool(is_forum)
+        logger.debug("Chat %s (type=%s): is_forum=%r", chat.id, chat.type, is_forum)
 
         self.topics_enabled = topics_enabled
-        if not self.topics_enabled:
-            logger.warning("Topics are disabled for this chat; falling back to General chat")
-        return self.topics_enabled
+        if not topics_enabled:
+            logger.warning(
+                "Topics are disabled for this chat (id=%s, type=%s, is_forum=%r); falling back to General chat",
+                chat.id,
+                chat.type,
+                is_forum,
+            )
+        return topics_enabled
 
     @staticmethod
     def _build_thread_title(phone_number: str, display_name: str | None) -> str:
@@ -536,7 +544,7 @@ class SMSBot:
         if not update.message:
             return
 
-        if not await self._are_topics_enabled():
+        if not await self._are_topics_enabled(force_check=True):
             await update.message.reply_text("❌ Topics are not enabled for this chat. Cannot rebuild threads.")
             return
 
