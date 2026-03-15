@@ -1,6 +1,7 @@
 import datetime
 import html
 import logging
+import re
 
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -8,6 +9,26 @@ from typing import Any
 
 
 logger = logging.getLogger(__name__)
+
+_HAS_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
+
+
+def _sanitize_surrogates(text: str) -> str:
+    """
+    Fix unpaired/paired UTF-16 surrogates from PDU decoding into valid Unicode.
+
+    PDU (UCS-2) decoded SMS text may contain raw surrogate pairs
+    (e.g. ``\\ud83d\\udc49``) that are invalid in UTF-8.
+    This round-trips through UTF-16 where surrogates are valid,
+    combining them into proper codepoints.
+    """
+    if not _HAS_SURROGATE_RE.search(text):
+        return text
+    try:
+        return text.encode("utf-16", "surrogatepass").decode("utf-16")
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        return text.encode("utf-8", "replace").decode("utf-8")
+
 
 _QUALITY_MAX_VALUE = 31  # Maximum RSSI value
 _QUALITY_MIN_VALUE = 0  # Minimum RSSI value
@@ -95,6 +116,9 @@ class SMSMessage:
     is_alphanumeric: bool
     sender_type: int | None = None  # Type of address (0x91=international, 0x81=national, 0x50/0xD0=alphanumeric)
     udh_info: UDHInfo | None = None  # UDH information for multipart messages
+
+    def __post_init__(self) -> None:
+        self.text = _sanitize_surrogates(self.text)
 
     @classmethod
     def from_dict(cls, data: dict) -> "SMSMessage":
