@@ -106,6 +106,22 @@ def format_phone_number(phone_number: str) -> str:
         return cleaned
 
 
+def normalize_recipient(recipient: str) -> str:
+    """
+    Normalize a recipient identifier for mapping and thread naming.
+
+    :param recipient: The phone number or sender ID.
+    :return: Normalized identifier.
+    """
+    cleaned = recipient.strip()
+    if is_valid_phone_number(cleaned):
+        return format_phone_number(cleaned)
+    stripped = re.sub(r"[\s\-().]", "", cleaned)
+    if stripped.lstrip("+").isdigit():
+        return stripped
+    return cleaned
+
+
 def extract_sender_from_message(message_text: str) -> str | None:
     """
     Extract sender information from a message text.
