@@ -16,7 +16,7 @@ from bot.utils import (
 )
 from config import get_settings
 from sms_reader import GSMModem, SMSMessage
-from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
+from telegram import BotCommand, ForumTopic, InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -93,11 +93,49 @@ class SMSBot:
         self.topics_enabled: bool | None = None
         self.shutdown_tasks: list[asyncio.Task] = []
 
-    async def _are_topics_enabled(self, *, force_check: bool = False) -> bool:
+    def _resolve_private_topics(self, user: telegram.User | None) -> bool:
+        """
+        Resolve topic availability for a private chat using ``User.has_topics_enabled``.
+
+        Persists the value in ``chat_data`` for the allowed chat so it survives
+        across calls that have no user context (e.g. incoming SMS forwarding).
+
+        :param user: The Telegram user from the current update, or None.
+        :return: True if the user has forum topic mode enabled in the private chat.
+        """
+        if not self.application:
+            return False
+        chat_data: dict = self.application.chat_data[settings.bot.allowed_user_id]
+        if user is not None:
+            has_topics: bool | None = user.has_topics_enabled
+            logger.debug("User %s: has_topics_enabled=%r", user.id, has_topics)
+            chat_data["has_topics_enabled"] = bool(has_topics)
+        else:
+            has_topics = chat_data.get("has_topics_enabled")
+            logger.debug(
+                "No user in context; using cached has_topics_enabled=%r from chat_data",
+                has_topics,
+            )
+        return bool(has_topics)
+
+    async def _are_topics_enabled(
+        self,
+        user: telegram.User | None = None,
+        *,
+        force_check: bool = False,
+    ) -> bool:
         """
         Check if topics are enabled for the target chat.
 
-        :param force_check: If True, bypass the cached result and re-query the Telegram API.
+        For private chats (Bot API 9.3+) topics are controlled per-user via
+        ``User.has_topics_enabled``; pass the ``user`` from ``update.effective_user``
+        so the value can be read and persisted in ``bot_data``.
+        For supergroups the field ``ChatFullInfo.is_forum`` is used instead.
+
+        :param user: The Telegram user from the current update, used to read
+            ``has_topics_enabled`` for private chats.
+        :param force_check: If True, bypass the in-memory cache and re-query
+            the Telegram API (and refresh ``bot_data`` for private chats).
         :return: True if topics are enabled, False otherwise.
         """
         if not force_check and self.topics_enabled is not None:
@@ -122,17 +160,19 @@ class SMSBot:
             self.topics_enabled = False
             return False
 
-        is_forum: bool | None = chat.is_forum
-        topics_enabled = bool(is_forum)
-        logger.debug("Chat %s (type=%s): is_forum=%r", chat.id, chat.type, is_forum)
+        if chat.type == telegram.Chat.PRIVATE:
+            topics_enabled = self._resolve_private_topics(user)
+        else:
+            is_forum: bool | None = chat.is_forum
+            logger.debug("Chat %s (type=%s): is_forum=%r", chat.id, chat.type, is_forum)
+            topics_enabled = bool(is_forum)
 
         self.topics_enabled = topics_enabled
         if not topics_enabled:
             logger.warning(
-                "Topics are disabled for this chat (id=%s, type=%s, is_forum=%r); falling back to General chat",
+                "Topics are disabled for this chat (id=%s, type=%s); falling back to General chat",
                 chat.id,
                 chat.type,
-                is_forum,
             )
         return topics_enabled
 
@@ -201,7 +241,7 @@ class SMSBot:
 
         try:
             thread_title = await self._get_thread_title(normalized_phone)
-            topic = await retry_telegram_api(
+            topic: ForumTopic | None = await retry_telegram_api(
                 self.application.bot.create_forum_topic,
                 chat_id=settings.bot.allowed_user_id,
                 name=thread_title,
@@ -544,7 +584,7 @@ class SMSBot:
         if not update.message:
             return
 
-        if not await self._are_topics_enabled(force_check=True):
+        if not await self._are_topics_enabled(update.effective_user, force_check=True):
             await update.message.reply_text("❌ Topics are not enabled for this chat. Cannot rebuild threads.")
             return
 
@@ -586,13 +626,15 @@ class SMSBot:
         await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
 
     @logfire.instrument("Execute Rebuild")
-    async def _execute_rebuild(self) -> str:
+    async def _execute_rebuild(self, user: telegram.User | None = None) -> str:
         """
         Execute the actual thread rebuild process.
 
+        :param user: The Telegram user initiating the rebuild, used to refresh
+            ``has_topics_enabled`` for private chats.
         :return: HTML-formatted result summary.
         """
-        if not await self._are_topics_enabled():
+        if not await self._are_topics_enabled(user):
             return "❌ Topics are not enabled for this chat. Cannot rebuild threads."
 
         if not self.application:
@@ -686,7 +728,7 @@ class SMSBot:
             return
 
         await query.edit_message_text("🔄 Rebuilding threads, please wait...")
-        result = await self._execute_rebuild()
+        result = await self._execute_rebuild(user)
 
         if isinstance(query.message, Message):
             await query.message.reply_text(result, parse_mode=ParseMode.HTML)
