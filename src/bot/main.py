@@ -47,12 +47,47 @@ class _InThreadFilter(MessageFilter):
 
 
 # noinspection PyAttributeOutsideInit
+def _normalize_recipient(recipient: str) -> str:
+    """
+    Normalize a recipient identifier for mapping and thread naming.
+
+    :param recipient: The phone number or sender ID.
+    :return: Normalized identifier.
+    """
+    cleaned = recipient.strip()
+    if is_valid_phone_number(cleaned):
+        return format_phone_number(cleaned)
+    stripped = re.sub(r"[\s\-().]", "", cleaned)
+    if stripped.lstrip("+").isdigit():
+        return stripped
+    return cleaned
+
+
+async def _update_status_message(
+    update: Update,
+    status_message: Message | None,
+    text: str,
+) -> None:
+    """
+    Update a status message or send a fallback reply.
+
+    :param update: The originating update.
+    :param status_message: Existing status message, if any.
+    :param text: Message text to send.
+    """
+    if status_message:
+        await status_message.edit_text(text)
+        return
+    if update.message:
+        await update.message.reply_text(text)
+
+
 class SMSBot:
     def __init__(self) -> None:
         self.modem: GSMModem
         self.modem_lock = asyncio.Lock()
 
-        self.application: Application
+        self.application: Application | None = None
         self.bot_data_lock = asyncio.Lock()
         self.topics_enabled: bool | None = None
         self.shutdown_tasks: list[asyncio.Task] = []
@@ -93,21 +128,6 @@ class SMSBot:
             logger.warning("Topics are disabled for this chat; falling back to General chat")
         return self.topics_enabled
 
-    def _normalize_recipient(self, recipient: str) -> str:
-        """
-        Normalize a recipient identifier for mapping and thread naming.
-
-        :param recipient: The phone number or sender ID.
-        :return: Normalized identifier.
-        """
-        cleaned = recipient.strip()
-        if is_valid_phone_number(cleaned):
-            return format_phone_number(cleaned)
-        stripped = re.sub(r"[\s\-().]", "", cleaned)
-        if stripped.lstrip("+").isdigit():
-            return stripped
-        return cleaned
-
     @staticmethod
     def _build_thread_title(phone_number: str, display_name: str | None) -> str:
         """
@@ -136,7 +156,7 @@ class SMSBot:
 
     async def _get_phone_display_name(self, normalized_phone: str) -> str | None:
         """
-        Get display name for a phone number.
+        Get a display name for a phone number.
 
         :param normalized_phone: The already-normalized phone number to look up.
         :return: The display name or None.
@@ -151,12 +171,12 @@ class SMSBot:
 
     async def _get_thread_title(self, phone_number: str) -> str:
         """
-        Build thread title for the phone number using any stored display name.
+        Build a thread title for the phone number using any stored display name.
 
         :param phone_number: The phone number to use.
         :return: The thread title.
         """
-        normalized_phone = self._normalize_recipient(phone_number)
+        normalized_phone = _normalize_recipient(phone_number)
         display_name = await self._get_phone_display_name(normalized_phone)
         return self._build_thread_title(normalized_phone, display_name)
 
@@ -207,7 +227,7 @@ class SMSBot:
         if not await self._are_topics_enabled():
             return thread_id
 
-        normalized_phone = self._normalize_recipient(phone_number)
+        normalized_phone = _normalize_recipient(phone_number)
         bot_data = self.application.bot_data
 
         async with self.bot_data_lock:
@@ -404,7 +424,7 @@ class SMSBot:
             logger.error("Cannot update phone display name: application not initialized")
             return
 
-        normalized_phone = self._normalize_recipient(phone_number)
+        normalized_phone = _normalize_recipient(phone_number)
         bot_data = self.application.bot_data
 
         async with self.bot_data_lock:
@@ -530,7 +550,7 @@ class SMSBot:
         for msg in messages:
             if msg.sender == "Me":
                 continue
-            normalized = self._normalize_recipient(msg.sender)
+            normalized = _normalize_recipient(msg.sender)
             senders.setdefault(normalized, []).append(msg)
 
         if not senders:
@@ -577,7 +597,7 @@ class SMSBot:
         for msg in messages:
             if msg.sender == "Me":
                 continue
-            normalized = self._normalize_recipient(msg.sender)
+            normalized = _normalize_recipient(msg.sender)
             senders.setdefault(normalized, []).append(msg)
 
         created_count = 0
@@ -586,7 +606,7 @@ class SMSBot:
         failed_count = 0
 
         for normalized_phone, sender_msgs in senders.items():
-            # Check if thread already exists
+            # Check if a thread already exists
             existing_thread_id: int | None = None
             bot_data = self.application.bot_data
             async with self.bot_data_lock:
@@ -688,14 +708,14 @@ class SMSBot:
             return WAITING_FOR_NUMBER
 
         elif len(args) == 1:
-            phone_number = self._normalize_recipient(args[0])
+            phone_number = _normalize_recipient(args[0])
             logger.debug(f"Phone number provided: {phone_number}, waiting for message")
             context.user_data["send_to_number"] = phone_number
             await update.message.reply_text(f"Please enter the message to send to {phone_number}:")
             return WAITING_FOR_MESSAGE
 
         else:
-            phone_number = self._normalize_recipient(args[0])
+            phone_number = _normalize_recipient(args[0])
             message_text = " ".join(args[1:])
             logger.info(f"Full SMS command received for {phone_number}")
 
@@ -741,7 +761,7 @@ class SMSBot:
             await update.message.reply_text("This contact doesn't have a phone number.")
             return WAITING_FOR_NUMBER
 
-        phone_number = self._normalize_recipient(contact.phone_number)
+        phone_number = _normalize_recipient(contact.phone_number)
         logger.debug(f"Formatted phone number: {phone_number}")
 
         context.user_data["send_to_number"] = phone_number
@@ -774,7 +794,7 @@ class SMSBot:
             return None
 
         # Clean and format the phone number
-        phone_number = self._normalize_recipient(contact.phone_number)
+        phone_number = _normalize_recipient(contact.phone_number)
 
         # Store the phone number in user_data
         context.user_data["send_to_number"] = phone_number
@@ -803,7 +823,7 @@ class SMSBot:
         phone_number = update.message.text.strip()
 
         # Basic validation
-        normalized_phone = self._normalize_recipient(phone_number)
+        normalized_phone = _normalize_recipient(phone_number)
         if not is_valid_phone_number(phone_number) and not normalized_phone.lstrip("+").isdigit():
             await update.message.reply_text(
                 "This doesn't look like a valid phone number or short code. Please try again or use /cancel to abort.",
@@ -853,6 +873,7 @@ class SMSBot:
         Handle a text message sent inside a thread.
 
         :param update: The update containing the message.
+        :param _: Context object.
         """
         if not await self._check_access(update):
             return
@@ -910,7 +931,7 @@ class SMSBot:
     async def reply_to_sms(self, update: Update, sender: str) -> None:
         """Handle replying to a specific sender."""
         logger.debug(f"Preparing sender identifier: {sender}")
-        phone_number = self._normalize_recipient(sender)
+        phone_number = _normalize_recipient(sender)
 
         if not update.message:
             logger.error("No message in update for SMS reply")
@@ -943,25 +964,6 @@ class SMSBot:
             message_thread_id=thread_id,
         )
 
-    async def _update_status_message(
-        self,
-        update: Update,
-        status_message: Message | None,
-        text: str,
-    ) -> None:
-        """
-        Update a status message or send a fallback reply.
-
-        :param update: The originating update.
-        :param status_message: Existing status message, if any.
-        :param text: Message text to send.
-        """
-        if status_message:
-            await status_message.edit_text(text)
-            return
-        if update.message:
-            await update.message.reply_text(text)
-
     @logfire.instrument("Send SMS")
     async def send_sms(self, update: Update, phone_number: str, message_text: str) -> int:
         """
@@ -978,7 +980,7 @@ class SMSBot:
         if not update.message:
             return ConversationHandler.END
 
-        normalized_phone = self._normalize_recipient(phone_number)
+        normalized_phone = _normalize_recipient(phone_number)
         if not is_valid_phone_number(phone_number) and not normalized_phone.lstrip("+").isdigit():
             await update.message.reply_text("Cannot send SMS to a non-numeric sender.")
             return ConversationHandler.END
@@ -1003,7 +1005,7 @@ class SMSBot:
 
             if success:
                 logger.info(f"SMS sent successfully to {normalized_phone}")
-                await self._update_status_message(
+                await _update_status_message(
                     update,
                     status_message,
                     f"✅ SMS sent successfully to {normalized_phone}",
@@ -1021,13 +1023,13 @@ class SMSBot:
                 await self.store_sms_message(sent_sms)
             else:
                 logger.error(f"Failed to send SMS to {normalized_phone}!")
-                await self._update_status_message(
+                await _update_status_message(
                     update,
                     status_message,
                     f"❌ Failed to send SMS to {normalized_phone}",
                 )
         except Exception as e:
-            await self._update_status_message(update, status_message, f"Error sending SMS: {e!s}")
+            await _update_status_message(update, status_message, f"Error sending SMS: {e!s}")
             logger.error(f"SMS sending error: {e}", exc_info=e)
 
         return ConversationHandler.END
@@ -1061,7 +1063,7 @@ class SMSBot:
             )
             self.shutdown_tasks.append(monitor_task)
 
-            # Start SMS consumer in a separate task
+            # Start an SMS consumer in a separate task
             consumer_task = asyncio.create_task(
                 self._sms_consumer(),
                 name="sms_consumer",
@@ -1076,6 +1078,9 @@ class SMSBot:
     def _setup_handlers(self) -> None:
         """Set up command and message handlers."""
         app = self.application
+        if app is None:
+            raise ValueError("Application instance is not initialized")
+
         # Command handlers
         app.add_handler(CommandHandler("start", self.cmd_start))
         app.add_handler(CommandHandler("clear", self.cmd_clear))
@@ -1105,7 +1110,7 @@ class SMSBot:
         # Handle /rebuild confirmation callbacks
         app.add_handler(CallbackQueryHandler(self.handle_rebuild_callback, pattern=r"^rebuild_"))
 
-        # Handle messages inside a thread (separate group so it doesn't block other handlers)
+        # Handle messages inside a thread (separate a group so it doesn't block other handlers)
         in_thread = _InThreadFilter()
         app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.REPLY & in_thread, self.handle_thread_message),
@@ -1125,16 +1130,7 @@ class SMSBot:
         for task in self.shutdown_tasks:
             task.cancel()
 
-    def run(self) -> None:
-        """Main function to run the SMS Telegram bot."""
-        # Check if a token is provided
-        if not settings.bot.token:
-            logger.error("No bot_token provided in settings")
-            return
-
-        if not settings.bot.allowed_user_id:
-            logger.warning("No allowed_user_id set, the bot will not respond to any user")
-
+    def make_application(self):
         # Create persistence
         persistence = PicklePersistence(
             filepath=settings.bot.persistence_file,
@@ -1157,6 +1153,21 @@ class SMSBot:
 
         # Set up handlers
         self._setup_handlers()
+
+    def run(self) -> None:
+        """Main function to run the SMS Telegram bot."""
+        # Check if a token is provided
+        if not settings.bot.token:
+            logger.error("No bot_token provided in settings")
+            return
+
+        if not settings.bot.allowed_user_id:
+            logger.warning("No allowed_user_id set, the bot will not respond to any user")
+
+        self.make_application()
+        if self.application is None:
+            raise ValueError("Application instance is not initialized")
+
         for _attempt in range(2):
             try:
                 self.application.run_polling(allowed_updates=Update.ALL_TYPES)
@@ -1167,20 +1178,4 @@ class SMSBot:
                 logger.warning("Failed to load persistence file, deleting and retrying")
                 settings.bot.persistence_file.unlink(missing_ok=True)
                 # Recreate application with fresh persistence
-                persistence = PicklePersistence(
-                    filepath=settings.bot.persistence_file,
-                    single_file=True,
-                    update_interval=10,
-                )
-                self.application = (
-                    Application.builder()
-                    .token(settings.bot.token)
-                    .persistence(persistence)
-                    .post_init(self._initialize_modem)
-                    .post_stop(self._shutdown)
-                    .connect_timeout(30.0)
-                    .read_timeout(30.0)
-                    .write_timeout(30.0)
-                    .build()
-                )
-                self._setup_handlers()
+                self.make_application()
