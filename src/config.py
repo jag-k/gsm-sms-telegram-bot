@@ -1,4 +1,5 @@
 import logging
+import re
 import tomllib
 
 from functools import lru_cache
@@ -7,6 +8,8 @@ from typing import Literal
 
 import logfire
 
+from logfire.integrations.httpx import RequestInfo
+from opentelemetry.trace import Span
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -107,6 +110,31 @@ class Settings(BaseSettings):
     logfire: LogfireSettings = Field(default_factory=LogfireSettings, description="Settings for Logfire")
 
 
+_TELEGRAM_BOT_PATH_RE = re.compile(r"/bot[^/]+/")
+
+
+def _redact_httpx_request_url(span: Span, request: RequestInfo) -> None:
+    """Remove Telegram bot tokens from HTTP client telemetry before export."""
+    url = str(request.url)
+    redacted_url = _TELEGRAM_BOT_PATH_RE.sub("/bot[redacted]/", url)
+    if redacted_url == url:
+        return
+
+    span.update_name(f"{request.method.decode()} api.telegram.org/bot[redacted]")
+    span.set_attributes(
+        {
+            "url.full": redacted_url,
+            "http.url": redacted_url,
+            "http.target": "/bot[redacted]",
+        },
+    )
+
+
+async def _redact_async_httpx_request_url(span: Span, request: RequestInfo) -> None:
+    """Async wrapper required by the HTTPX async instrumentation hook."""
+    _redact_httpx_request_url(span, request)
+
+
 def configure_logfire(settings: Settings) -> None:
     """Configure Logfire and logging based on the provided settings."""
 
@@ -132,7 +160,14 @@ def configure_logfire(settings: Settings) -> None:
     logging.getLogger("sms_reader").setLevel(settings.log_level.upper())
 
     logfire.instrument_system_metrics()
-    logfire.instrument_httpx()
+    logfire.instrument_httpx(
+        capture_all=False,
+        capture_headers=False,
+        capture_request_body=False,
+        capture_response_body=False,
+        async_request_hook=_redact_async_httpx_request_url,
+        request_hook=_redact_httpx_request_url,
+    )
 
 
 @lru_cache(maxsize=1)

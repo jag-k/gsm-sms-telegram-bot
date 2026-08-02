@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 import logfire
 
@@ -83,6 +83,7 @@ class GSMModem:
             reader=self.reader,
             queue=self.queue,
             check_interval=check_interval,
+            ensure_initialized=self.ensure_setup,
         )
 
     # ------------------------------------------------------------------
@@ -172,16 +173,28 @@ class GSMModem:
         response = await self.transport.send_at_command("AT+CMGD=1,4")
         return response.success
 
+    async def ensure_setup(self) -> bool:
+        """Ensure the full SMS configuration is applied after a reconnect."""
+        if self.controller.is_initialized:
+            return True
+        return await self.setup()
+
+    def close(self) -> None:
+        """Release the serial port during shutdown."""
+        self.transport.close()
+
     async def run_sms_monitoring(
         self,
         interval: float | None = None,
         lock: asyncio.Lock | None = None,
+        on_health_change: Callable[[bool, str], Awaitable[None]] | None = None,
     ) -> None:
         """Delegate to :meth:`SMSMonitor.run`.
 
         :param interval: Check interval in seconds (defaults to instance setting)
         :param lock: Optional lock to use for serialising modem access
         """
+        self.monitor.set_health_callback(on_health_change)
         await self.monitor.run(interval=interval, lock=lock)
 
     # ------------------------------------------------------------------

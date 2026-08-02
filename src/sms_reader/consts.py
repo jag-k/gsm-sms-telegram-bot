@@ -37,6 +37,7 @@ SIGNIFICANT_PROCESSING_TIME = 1.0  # Log warning if processing takes longer than
 # Watchdog settings
 MODEM_WATCHDOG_INTERVAL = 300  # Seconds between AT ping health checks (5 minutes)
 MODEM_WATCHDOG_TIMEOUT = 10.0  # Seconds to wait for AT response before declaring modem dead
+MODEM_RECOVERY_MAX_DELAY = 300.0  # Maximum seconds between modem recovery attempts
 
 # Buffer clearing settings
 BUFFER_CLEAR_MAX_READS = 16  # Maximum read attempts when flushing the input buffer

@@ -39,6 +39,7 @@ class ModemTransport:
         self.port = port
         self.baud_rate = baud_rate
         self._response_wait_time = response_wait_time
+        self.last_error: str | None = None
 
     def _close_connection(self) -> None:
         """Close the serial connection if open."""
@@ -46,7 +47,11 @@ class ModemTransport:
         if writer is not None:
             with contextlib.suppress(Exception):
                 writer.close()
-            self._writer = None  # type: ignore[assignment]
+            del self._writer
+
+    def close(self) -> None:
+        """Close the serial connection so another setup attempt can reopen it."""
+        self._close_connection()
 
     @logfire.instrument("Setup: Connect to Modem")
     async def connect(self) -> bool:
@@ -58,8 +63,10 @@ class ModemTransport:
                 baudrate=self.baud_rate,
             )
             logger.info("Connected to GSM modem.")
+            self.last_error = None
             return True
         except Exception as e:
+            self.last_error = str(e)
             logger.error(f"Failed to connect to modem: {e}", exc_info=e)
             return False
 
@@ -122,15 +129,16 @@ class ModemTransport:
         :param response_wait_time: Maximum time to wait for response before giving up
         :return: Structured response containing success status and data
         """
-        if self._writer is None:
+        writer = getattr(self, "_writer", None)
+        if writer is None:
             raise RuntimeError("Modem not connected")
 
         try:
             await self._clear_input_buffer()
 
             logger.debug(f"Sending AT command: {command}")
-            self._writer.write((command + "\r\n").encode())
-            await self._writer.drain()
+            writer.write((command + "\r\n").encode())
+            await writer.drain()
 
             if delay > MIN_SIGNIFICANT_DELAY:
                 await asyncio.sleep(delay)
@@ -141,18 +149,22 @@ class ModemTransport:
             response, elapsed = await self._read_response_with_deadline(deadline)
 
             if not response and elapsed >= wait_time:
+                self.last_error = f"Command timed out: {command}"
                 logger.warning(f"Command timed out after {elapsed:.2f}s: {command}")
-                return ATResponse(raw_response="", error_message=f"Command timed out: {command}")
+                return ATResponse(raw_response="", error_message=self.last_error)
 
             if "ERROR" in response:
+                self.last_error = f"Command failed: {command}"
                 logger.warning(f"Command returned ERROR: {command}")
                 return ATResponse(
                     raw_response=response,
-                    error_message=f"Command failed: {command}",
+                    error_message=self.last_error,
                 )
 
+            self.last_error = None
             return ATResponse(raw_response=response)
 
         except Exception as e:
+            self.last_error = str(e)
             logger.error(f"Error sending AT command {command}: {e}", exc_info=e)
-            return ATResponse(raw_response="", error_message=str(e))
+            return ATResponse(raw_response="", error_message=self.last_error)

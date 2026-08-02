@@ -58,6 +58,20 @@ class SMSBot:
         self._bot_data_lock = asyncio.Lock()
         self.shutdown_tasks: list[asyncio.Task] = []
 
+    async def _on_modem_health_change(self, healthy: bool, detail: str) -> None:
+        """Notify the owner only when modem availability changes."""
+        if self.application is None or not settings.bot.allowed_user_id:
+            return
+        status = "✅ GSM modem recovered" if healthy else "⚠️ GSM modem is unavailable"
+        try:
+            await retry_telegram_api(
+                self.app.bot.send_message,
+                chat_id=settings.bot.allowed_user_id,
+                text=f"{status}. {detail}",
+            )
+        except Exception as exc:
+            logger.error("Failed to send modem health notification: %s", exc, exc_info=exc)
+
     @property
     def app(self) -> Application:
         """
@@ -227,15 +241,16 @@ class SMSBot:
                     check_interval=settings.modem.check_rate,
                 )
                 setup_success = await self.modem.setup()
-
-                if not setup_success:
-                    logger.error("Failed to set up GSM modem")
-                    raise RuntimeError("Failed to set up GSM modem")
-
-                logger.info("GSM modem initialized successfully")
+                if setup_success:
+                    logger.info("GSM modem initialized successfully")
+                else:
+                    logger.error("Initial modem setup failed; SMS monitoring will retry in the background")
 
             monitor_task = asyncio.create_task(
-                self.modem.run_sms_monitoring(lock=self.modem_lock),
+                self.modem.run_sms_monitoring(
+                    lock=self.modem_lock,
+                    on_health_change=self._on_modem_health_change,
+                ),
                 name="sms_monitoring",
             )
             self.shutdown_tasks.append(monitor_task)
@@ -248,7 +263,7 @@ class SMSBot:
 
         except Exception as e:
             logger.error(f"Error initializing modem: {e}", exc_info=e)
-            raise e from None
+            await self._on_modem_health_change(False, f"initialization error: {e}")
 
     @logfire.instrument("Shutdown")
     async def _shutdown(self, _: Application) -> None:
@@ -256,6 +271,8 @@ class SMSBot:
         logger.info("Shutting down...")
         for task in self.shutdown_tasks:
             task.cancel()
+        if hasattr(self, "modem"):
+            self.modem.close()
 
     def make_application(self) -> None:
         """Build the Telegram application and wire up all components."""

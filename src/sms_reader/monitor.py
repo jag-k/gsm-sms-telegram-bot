@@ -11,6 +11,7 @@ from sms_reader.consts import (
     DEFAULT_SMS_CHECK_INTERVAL,
     INACTIVE_MODE_THRESHOLD,
     MIN_SLEEP_INTERVAL,
+    MODEM_RECOVERY_MAX_DELAY,
     SIGNIFICANT_PROCESSING_TIME,
 )
 from sms_reader.message_queue import MessageQueue
@@ -32,6 +33,7 @@ class SMSMonitor:
         reader: SMSReader,
         queue: MessageQueue,
         check_interval: float = DEFAULT_SMS_CHECK_INTERVAL,
+        ensure_initialized: Callable[[], Awaitable[bool]] | None = None,
     ) -> None:
         """Initialise the monitor.
 
@@ -44,6 +46,29 @@ class SMSMonitor:
         self._reader = reader
         self._queue = queue
         self._check_interval = check_interval
+        self._ensure_initialized = ensure_initialized
+        self._on_health_change: Callable[[bool, str], Awaitable[None]] | None = None
+        self._is_healthy: bool | None = None
+
+    def set_health_callback(self, callback: Callable[[bool, str], Awaitable[None]] | None) -> None:
+        """Set the callback used to report availability transitions."""
+        self._on_health_change = callback
+
+    async def _report_health(self, healthy: bool, detail: str) -> None:
+        """Emit state changes once, avoiding an alert for every retry."""
+        previous = self._is_healthy
+        self._is_healthy = healthy
+        if self._on_health_change is None or previous == healthy:
+            return
+        if previous is None and healthy:
+            return
+        await self._on_health_change(healthy, detail)
+
+    async def _ensure_modem_initialized(self, retry_interval: float) -> bool:
+        """Run full setup when available, otherwise retain legacy controller setup."""
+        if self._ensure_initialized is not None:
+            return await self._ensure_initialized()
+        return await self._controller.ensure_initialized(retry_interval)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -103,19 +128,25 @@ class SMSMonitor:
         """
         try:
             async with lock:
-                if not await self._controller.ensure_initialized(base_interval):
+                if not await self._ensure_modem_initialized(base_interval):
+                    await self._report_health(False, "modem setup did not complete")
                     return None
                 await self._controller.run_watchdog()
-                return await sms_reader_fn()
+                messages = await sms_reader_fn()
+                if self._controller._transport.last_error:
+                    raise ModemConnectionLostError(self._controller._transport.last_error)
+                return messages
         except ModemConnectionLostError as e:
             logger.critical(f"Modem connection lost: {e} — reconnecting after {base_interval:.1f}s")
             self._controller.is_initialized = False
             self._controller._transport._close_connection()
+            await self._report_health(False, str(e))
             return None
         except OSError as e:
             logger.error(f"Serial I/O error: {e} — reconnecting after {base_interval:.1f}s")
             self._controller.is_initialized = False
             self._controller._transport._close_connection()
+            await self._report_health(False, str(e))
             return None
 
     # ------------------------------------------------------------------
@@ -145,6 +176,7 @@ class SMSMonitor:
         current_interval = interval
         last_message_time = now_utc()
         message_activity = False
+        recovery_failures = 0
 
         sms_reader_fn = self._reader.read_sms_pdu if not self._reader.use_ucs2 else self._reader.read_sms_text
 
@@ -158,8 +190,20 @@ class SMSMonitor:
                 messages = await self._run_single_check(lock, interval, sms_reader_fn)
 
                 if messages is None:
-                    await asyncio.sleep(interval)
+                    recovery_failures += 1
+                    recovery_delay = min(
+                        interval * 2 ** min(recovery_failures, 7),
+                        MODEM_RECOVERY_MAX_DELAY,
+                    )
+                    logger.warning(
+                        f"Modem unavailable; retrying full setup in {recovery_delay:.1f}s "
+                        f"(attempt {recovery_failures})",
+                    )
+                    await asyncio.sleep(recovery_delay)
                     continue
+
+                await self._report_health(True, "modem responded and SMS monitoring resumed")
+                recovery_failures = 0
 
                 current_interval, last_message_time, message_activity = self._compute_adaptive_interval(
                     messages_count=len(messages),
