@@ -3,7 +3,7 @@ import logging
 
 import logfire
 
-from sms_reader import SMSMessage
+from bot.models import StoredSMS
 from telegram.ext import Application
 
 
@@ -18,7 +18,7 @@ class SMSStorage:
         self._lock = bot_data_lock
 
     @logfire.instrument("Get SMS")
-    async def get_messages(self) -> list[SMSMessage]:
+    async def get_messages(self) -> list[StoredSMS]:
         """
         Retrieve stored SMS messages from the bot's persistence storage.
 
@@ -27,10 +27,10 @@ class SMSStorage:
         bot_data = self._app.bot_data
         bot_data.setdefault("sms_messages", [])
         async with self._lock:
-            return [SMSMessage.from_dict(msg) for msg in bot_data["sms_messages"]]
+            return [StoredSMS.from_dict(msg) for msg in bot_data["sms_messages"]]
 
     @logfire.instrument("Store SMS")
-    async def store_message(self, sms: SMSMessage) -> None:
+    async def store_message(self, sms: StoredSMS) -> None:
         """
         Store an SMS message in the bot's persistence storage.
 

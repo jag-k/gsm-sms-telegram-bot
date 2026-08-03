@@ -5,6 +5,7 @@ import logging
 import logfire
 
 from bot.handlers import register_handlers
+from bot.models import StoredSMS
 from bot.storage import SMSStorage
 from bot.threads import ThreadManager
 from bot.utils import (
@@ -14,7 +15,9 @@ from bot.utils import (
     unauthorized_response,
 )
 from config import get_settings
-from sms_reader import GSMModem, SMSMessage
+from gsm_sms.client import GatewayClient, GatewayEvent
+from gsm_sms.core.events import HealthChangedEvent, IncomingSmsEvent, ModemDiagnosticEvent, SendStatusEvent
+from gsm_sms.core.models import HealthState, IncomingSMS, SendRequest
 from telegram import Message, Update
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -26,6 +29,7 @@ from telegram.ext import (
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+GATEWAY_EVENT_CURSOR_KEY = "gateway_event_cursor"
 
 
 async def _update_status_message(
@@ -49,25 +53,35 @@ async def _update_status_message(
 
 class SMSBot:
     def __init__(self) -> None:
-        self.modem: GSMModem
-        self.modem_lock = asyncio.Lock()
+        self.gateway: GatewayClient | None = None
 
         self.application: Application | None = None
         self.threads: ThreadManager
         self.storage: SMSStorage
         self._bot_data_lock = asyncio.Lock()
+        self._last_modem_health_state: str | None = None
         self.shutdown_tasks: list[asyncio.Task] = []
 
-    async def _on_modem_health_change(self, healthy: bool, detail: str) -> None:
+    async def _on_modem_health_change(self, health: HealthState) -> None:
         """Notify the owner only when modem availability changes."""
+        previous = self._last_modem_health_state
+        self._last_modem_health_state = health.state
+        if health.state in {"starting", "recovering"}:
+            return
+        if health.state == "ready" and previous not in {
+            "offline",
+            "recovering",
+            "manual_intervention_required",
+        }:
+            return
         if self.application is None or not settings.bot.allowed_user_id:
             return
-        status = "✅ GSM modem recovered" if healthy else "⚠️ GSM modem is unavailable"
+        status = "✅ GSM modem recovered" if health.state == "ready" else "⚠️ GSM modem is unavailable"
         try:
             await retry_telegram_api(
                 self.app.bot.send_message,
                 chat_id=settings.bot.allowed_user_id,
-                text=f"{status}. {detail}",
+                text=f"{status}. {health.detail or health.state}",
             )
         except Exception as exc:
             logger.error("Failed to send modem health notification: %s", exc, exc_info=exc)
@@ -99,16 +113,16 @@ class SMSBot:
             await unauthorized_response(update)
             logger.warning(f"Unauthorized access attempt by user {user.id} ({user.username})")
             return False
-        if not self.modem:
-            logger.error("GSM modem is not initialized!")
+        if not self.gateway:
+            logger.error("GSM SMS gateway is not initialized!")
             msg = update.message
             if msg:
-                await msg.reply_text("GSM modem is not initialized.")
+                await msg.reply_text("GSM SMS gateway is not initialized.")
             return False
         return True
 
     @logfire.instrument("SMS Received")
-    async def on_sms_received(self, sms: SMSMessage) -> None:
+    async def on_sms_received(self, sms: IncomingSMS) -> bool:
         """
         Callback function for when a new SMS is received.
 
@@ -116,12 +130,12 @@ class SMSBot:
         """
         if not (self.application and settings.bot.allowed_user_id):
             logger.warning("Cannot forward SMS: missing user ID or application not initialized")
-            return
+            return False
 
-        await self.storage.store_message(sms)
-        logger.info(f"Received SMS from {sms.sender}: {sms.text[:50]}")
+        stored_sms = StoredSMS.from_incoming(sms)
+        logger.info("Received SMS in %s slot %d", sms.storage, sms.slot)
 
-        message_text = f"📩 <b>New SMS received</b>\n\n{sms.to_html()}"
+        message_text = f"📩 <b>New SMS received</b>\n\n{stored_sms.to_html()}"
         thread_id = await self.threads.get_or_create_thread(sms.sender)
 
         message_kwargs = {
@@ -137,16 +151,55 @@ class SMSBot:
                 self.app.bot.send_message,
                 **message_kwargs,
             )
+            await self.storage.store_message(stored_sms)
         except Exception as e:
             logger.error(f"Failed to forward SMS to Telegram: {e}", exc_info=e)
+            return False
+        return True
 
-    async def _sms_consumer(self) -> None:
-        """Consume SMS messages from the modem queue and forward them to Telegram."""
-        if not self.modem:
-            logger.error("SMS consumer started without a modem instance")
+    async def _handle_gateway_event(self, envelope: GatewayEvent) -> bool:
+        """Process one durable event and report whether its cursor may advance."""
+        event = envelope.event
+        if isinstance(event, IncomingSmsEvent):
+            try:
+                return await self.on_sms_received(event.message)
+            except Exception as exc:
+                logger.error(
+                    "Failed to process incoming SMS from %s slot %d: %s",
+                    event.message.storage,
+                    event.message.slot,
+                    type(exc).__name__,
+                    exc_info=exc,
+                )
+                return False
+        if isinstance(event, HealthChangedEvent):
+            await self._on_modem_health_change(event.health)
+        elif isinstance(event, ModemDiagnosticEvent):
+            logger.warning(
+                "Modem diagnostic: kind=%s command=%s storage=%s retry=%s exception=%s",
+                event.kind,
+                event.command_name,
+                event.storage,
+                event.retry_count,
+                event.exception_class,
+            )
+        elif isinstance(event, SendStatusEvent):
+            logger.debug("Send operation %s changed to %s", event.operation.id, event.operation.status)
+        return True
+
+    async def _gateway_event_consumer(self) -> None:
+        """Resume the gateway stream only after Telegram has handled each event."""
+        if not self.gateway:
+            logger.error("Gateway event consumer started without a client")
             return
-        async for sms in self.modem:
-            await self.on_sms_received(sms)
+        while True:
+            cursor = int(self.app.bot_data.get(GATEWAY_EVENT_CURSOR_KEY, 0))
+            async for envelope in self.gateway.events(last_event_id=cursor):
+                if not await self._handle_gateway_event(envelope):
+                    await asyncio.sleep(1)
+                    break
+                async with self._bot_data_lock:
+                    self.app.bot_data[GATEWAY_EVENT_CURSOR_KEY] = envelope.id
 
     async def _send_status_message(self, thread_id: int | None) -> Message | None:
         """
@@ -196,9 +249,11 @@ class SMSBot:
             status_message = await update.message.reply_text("Sending SMS, please wait...")
 
         try:
-            async with self.modem_lock:
-                logger.info(f"Sending SMS to {normalized_phone}")
-                success = await self.modem.send_sms(normalized_phone, message_text)
+            if self.gateway is None:
+                raise RuntimeError("GSM SMS gateway is not initialized")
+            logger.info("Sending SMS operation")
+            operation = await self.gateway.send(SendRequest(recipient=normalized_phone, text=message_text))
+            success = operation.status == "sent"
 
             if success:
                 logger.info(f"SMS sent successfully to {normalized_phone}")
@@ -208,7 +263,7 @@ class SMSBot:
                     f"✅ SMS sent successfully to {normalized_phone}",
                 )
 
-                sent_sms = SMSMessage(
+                sent_sms = StoredSMS(
                     index="outgoing",
                     sender="Me",
                     text=message_text,
@@ -230,49 +285,39 @@ class SMSBot:
 
         return ConversationHandler.END
 
-    async def _initialize_modem(self, _: Application) -> None:
-        """Initialize and set up the GSM modem."""
+    async def _initialize_gateway(self, _: Application) -> None:
+        """Initialize the HTTP/SSE gateway client."""
         try:
-            with logfire.span("Setup: Modem"):
-                self.modem = GSMModem(
-                    port=settings.modem.modem_port,
-                    baud_rate=settings.modem.baud_rate,
-                    merge_messages_timeout=settings.modem.merge_messages_timeout,
-                    check_interval=settings.modem.check_rate,
-                )
-                setup_success = await self.modem.setup()
-                if setup_success:
-                    logger.info("GSM modem initialized successfully")
-                else:
-                    logger.error("Initial modem setup failed; SMS monitoring will retry in the background")
-
-            monitor_task = asyncio.create_task(
-                self.modem.run_sms_monitoring(
-                    lock=self.modem_lock,
-                    on_health_change=self._on_modem_health_change,
-                ),
-                name="sms_monitoring",
-            )
-            self.shutdown_tasks.append(monitor_task)
+            with logfire.span("Setup: GSM SMS gateway"):
+                self.gateway = GatewayClient(settings.modem.gateway_url)
+                logger.info("GSM SMS gateway client configured")
 
             consumer_task = asyncio.create_task(
-                self._sms_consumer(),
-                name="sms_consumer",
+                self._gateway_event_consumer(),
+                name="gateway_event_consumer",
             )
             self.shutdown_tasks.append(consumer_task)
 
         except Exception as e:
-            logger.error(f"Error initializing modem: {e}", exc_info=e)
-            await self._on_modem_health_change(False, f"initialization error: {e}")
+            logger.error(f"Error initializing gateway client: {e}", exc_info=e)
+            if self.gateway is not None:
+                await self.gateway.close()
+                self.gateway = None
+            await self._on_modem_health_change(
+                HealthState(state="manual_intervention_required", detail=f"initialization error: {type(e).__name__}"),
+            )
 
     @logfire.instrument("Shutdown")
     async def _shutdown(self, _: Application) -> None:
-        """Clean up tasks and close the modem."""
+        """Clean up tasks and close the gateway client."""
         logger.info("Shutting down...")
         for task in self.shutdown_tasks:
             task.cancel()
-        if hasattr(self, "modem"):
-            self.modem.close()
+        if self.shutdown_tasks:
+            await asyncio.gather(*self.shutdown_tasks, return_exceptions=True)
+        self.shutdown_tasks.clear()
+        if self.gateway is not None:
+            await self.gateway.close()
 
     def make_application(self) -> None:
         """Build the Telegram application and wire up all components."""
@@ -286,7 +331,7 @@ class SMSBot:
             Application.builder()
             .token(settings.bot.token)
             .persistence(persistence)
-            .post_init(self._initialize_modem)
+            .post_init(self._initialize_gateway)
             .post_stop(self._shutdown)
             .connect_timeout(30.0)
             .read_timeout(30.0)

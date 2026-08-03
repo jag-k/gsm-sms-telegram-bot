@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING
 import logfire
 import telegram
 
+from bot.models import StoredSMS
 from bot.utils import normalize_recipient, retry_telegram_api
 from config import get_settings
-from sms_reader import SMSMessage
 from telegram import BotCommand, BotCommandScopeChat, InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
@@ -66,7 +66,7 @@ class CommandHandlers:
 
         await set_bot_commands(self._bot.app.bot, update.effective_chat.id, include_cancel=False)
 
-        messages: list[SMSMessage] = await self._bot.storage.get_messages()
+        messages: list[StoredSMS] = await self._bot.storage.get_messages()
         total_messages = len(messages)
 
         if not messages:
@@ -119,7 +119,7 @@ class CommandHandlers:
             await update.message.reply_text("No SMS messages in history to rebuild.")
             return
 
-        senders: dict[str, list[SMSMessage]] = {}
+        senders: dict[str, list[StoredSMS]] = {}
         for msg in messages:
             if msg.sender == "Me":
                 continue
@@ -163,7 +163,7 @@ class CommandHandlers:
 
         messages = await self._bot.storage.get_messages()
 
-        senders: dict[str, list[SMSMessage]] = {}
+        senders: dict[str, list[StoredSMS]] = {}
         for msg in messages:
             if msg.sender == "Me":
                 continue

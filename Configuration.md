@@ -27,17 +27,14 @@ Settings for the SMS Telegram Bot.
 
 ### ModemSettings
 
-Settings for the GSM Modem.
+Settings for access to the GSM SMS gateway.
 
 **Environment Prefix**: `MODEM__`
 
-| Name                            | Type      | Default          | Description                                                | Example          |
-|---------------------------------|-----------|------------------|------------------------------------------------------------|------------------|
-| `MODEM__MODEM_PORT`             | `string`  | `"/dev/ttyUSB0"` | Serial port for the GSM modem                              | `"/dev/ttyUSB0"` |
-| `MODEM__BAUD_RATE`              | `integer` | `115200`         | Baud rate for the GSM modem                                | `115200`         |
-| `MODEM__DEFAULT_REGION`         | `string`  | `"US"`           | Default region code for phone numbers without country code | `"US"`           |
-| `MODEM__MERGE_MESSAGES_TIMEOUT` | `integer` | `10`             | Timeout in seconds for merging messages                    | `10`             |
-| `MODEM__CHECK_RATE`             | `integer` | `3`              | Rate in seconds to check for new messages                  | `3`              |
+| Name                    | Type         | Default                    | Description                                                | Example                    |
+|-------------------------|--------------|----------------------------|------------------------------------------------------------|----------------------------|
+| `MODEM__GATEWAY_URL`    | `AnyHttpUrl` | `"http://127.0.0.1:8000/"` | Base URL of gsm-sms-gateway                                | `"http://127.0.0.1:8000/"` |
+| `MODEM__DEFAULT_REGION` | `string`     | `"US"`                     | Default region code for phone numbers without country code | `"US"`                     |
 
 ### LogfireSettings
 
@@ -47,6 +44,6 @@ Settings for Logfire.
 
 | Name                   | Type                        | Default   | Description                               | Example   |
 |------------------------|-----------------------------|-----------|-------------------------------------------|-----------|
-| `LOGFIRE__TOKEN`       | `string` \| `NoneType`      | `null`    | Logfire API token                         | `null`    |
+| `LOGFIRE__TOKEN`       | `string` \| `null`          | `null`    | Logfire API token                         | `null`    |
 | `LOGFIRE__ENVIRONMENT` | `"local"` \| `"production"` | `"local"` | Logfire environment name                  | `"local"` |
 | `LOGFIRE__REVISION`    | `string`                    | `"main"`  | Git revision. Branch name or commit hash. | `"main"`  |

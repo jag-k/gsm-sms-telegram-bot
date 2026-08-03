@@ -10,7 +10,7 @@ import logfire
 
 from logfire.integrations.httpx import RequestInfo
 from opentelemetry.trace import Span
-from pydantic import BaseModel, Field
+from pydantic import AnyHttpUrl, BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -71,13 +71,10 @@ class BotSettings(BaseModel):
 
 
 class ModemSettings(BaseModel):
-    """Settings for the GSM Modem."""
+    """Settings for access to the GSM SMS gateway."""
 
-    modem_port: str = Field("/dev/ttyUSB0", description="Serial port for the GSM modem")
-    baud_rate: int = Field(115200, description="Baud rate for the GSM modem")
+    gateway_url: AnyHttpUrl = Field(AnyHttpUrl("http://127.0.0.1:8000"), description="Base URL of gsm-sms-gateway")
     default_region: str = Field("US", description="Default region code for phone numbers without country code")
-    merge_messages_timeout: int = Field(10, description="Timeout in seconds for merging messages")
-    check_rate: int = Field(3, description="Rate in seconds to check for new messages")
 
 
 class LogfireSettings(BaseModel):
@@ -157,7 +154,7 @@ def configure_logfire(settings: Settings) -> None:
 
     logging.getLogger().addHandler(logfire.LogfireLoggingHandler())
     logging.getLogger("bot").setLevel(settings.log_level.upper())
-    logging.getLogger("sms_reader").setLevel(settings.log_level.upper())
+    logging.getLogger("gsm_sms").setLevel(settings.log_level.upper())
 
     logfire.instrument_system_metrics()
     logfire.instrument_httpx(

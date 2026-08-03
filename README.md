@@ -11,7 +11,10 @@
 
 *Send and receive SMS via Telegram using a GSM modem*
 
-This bot allows you to send and receive SMS messages through Telegram using a GSM modem connected to your device.
+This bot sends and receives SMS through a separately running `gsm-sms-gateway`.
+It never opens the serial port: the gateway is the only owner of the modem and
+provides durable REST/SSE delivery. The bot uses the optional client from
+[`gsm-sms`](https://github.com/jag-k/gsm-sms).
 
 ## Features
 
@@ -25,7 +28,7 @@ This bot allows you to send and receive SMS messages through Telegram using a GS
 ## Requirements
 
 - Python 3.13 or higher
-- GSM modem (connected via USB)
+- Running `gsm-sms-gateway`
 - Telegram Bot Token
 
 ## Installation
@@ -34,7 +37,7 @@ This bot allows you to send and receive SMS messages through Telegram using a GS
 
 Requirements:
 
-- GSM modem (connected via USB)
+- Running `gsm-sms-gateway` reachable from the bot container
 - Telegram Bot Token
 - Docker
 - Docker Compose (optional)
@@ -50,7 +53,7 @@ cp .env.example .env
 # Edit .env with your settings
 nano .env
 
-# Start the container
+# Start the containers
 docker compose up -d
 ```
 
@@ -59,7 +62,7 @@ docker compose up -d
 Requirements:
 
 - Python 3.13 or higher
-- GSM modem (connected via USB)
+- Running `gsm-sms-gateway`
 - Telegram Bot Token
 - [uv](https://github.com/astral-sh/uv)
 
@@ -90,8 +93,7 @@ BOT__TOKEN=your_telegram_bot_token
 BOT__ALLOWED_USER_ID=your_telegram_user_id
 
 # Optional settings (defaults shown)
-# MODEM__MODEM_PORT="/dev/ttyUSB0"
-# MODEM__BAUD_RATE=115200
+# MODEM__GATEWAY_URL="http://127.0.0.1:8000"
 # MODEM__DEFAULT_REGION="US"
 ```
 

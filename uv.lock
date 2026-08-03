@@ -133,17 +133,36 @@ wheels = [
 ]
 
 [[package]]
+name = "gsm-sms"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "pyserial" },
+    { name = "pyserial-asyncio" },
+    { name = "python-messaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/13/81/3d0822ebcb856a8051a651917d913812ce9c636a9011d029bb2ce63944d8/gsm_sms-0.1.0.tar.gz", hash = "sha256:9a8fede232e48809dbd662ab81c99a2b4c28d840d48b5711a64b498902adcde3", size = 72957, upload-time = "2026-08-03T20:09:02.384Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/93/e4/704e1a99a1b57e59e08a615c3a06b5eaa2f9b76bec5a30853baee93f77e1/gsm_sms-0.1.0-py3-none-any.whl", hash = "sha256:a52d6c65a65019e3124a2f523e153b4ed3e2f5a018c82459d423bab4a5cf3dc9", size = 22743, upload-time = "2026-08-03T20:09:01.152Z" },
+]
+
+[package.optional-dependencies]
+client = [
+    { name = "httpx" },
+    { name = "httpx-sse" },
+]
+
+[[package]]
 name = "gsm-sms-telegram-bot"
 version = "0.2.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "gsm-sms", extra = ["client"] },
     { name = "logfire", extra = ["httpx", "system-metrics"] },
     { name = "pydantic" },
     { name = "pydantic-extra-types", extra = ["phonenumbers"] },
     { name = "pydantic-settings" },
-    { name = "pyserial" },
-    { name = "pyserial-asyncio" },
-    { name = "python-messaging" },
     { name = "python-telegram-bot" },
 ]
 
@@ -159,13 +178,11 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "gsm-sms", extras = ["client"], specifier = "==0.1.0" },
     { name = "logfire", extras = ["system-metrics", "httpx"], specifier = ">=4.25.0" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pydantic-extra-types", extras = ["phonenumbers"], specifier = ">=2.11.0" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
-    { name = "pyserial", specifier = ">=3.5" },
-    { name = "pyserial-asyncio", specifier = ">=0.6" },
-    { name = "python-messaging", specifier = ">=0.5.13" },
     { name = "python-telegram-bot", specifier = ">=22.6" },
 ]
 
@@ -214,6 +231,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b1/df/48c586a5fe32a0f01324ee087459e112ebb7224f646c0b5023f5e79e9956/httpx-0.28.1.tar.gz", hash = "sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc", size = 141406, upload-time = "2024-12-06T15:37:23.222Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2a/39/e50c7c3a983047577ee07d2a9e53faf5a69493943ec3f6a384bdc792deb2/httpx-0.28.1-py3-none-any.whl", hash = "sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad", size = 73517, upload-time = "2024-12-06T15:37:21.509Z" },
+]
+
+[[package]]
+name = "httpx-sse"
+version = "0.4.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0f/4c/751061ffa58615a32c31b2d82e8482be8dd4a89154f003147acee90f2be9/httpx_sse-0.4.3.tar.gz", hash = "sha256:9b1ed0127459a66014aec3c56bebd93da3c1bc8bb6618c8082039a44889a755d", size = 15943, upload-time = "2025-10-10T21:48:22.271Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d2/fd/6668e5aec43ab844de6fc74927e155a3b37bf40d7c3790e49fc0406b6578/httpx_sse-0.4.3-py3-none-any.whl", hash = "sha256:0ac1c9fe3c0afad2e0ebb25a934a59f4c7823b60792691f779fad2c5568830fc", size = 8960, upload-time = "2025-10-10T21:48:21.158Z" },
 ]
 
 [[package]]
@@ -798,14 +824,14 @@ wheels = [
 
 [[package]]
 name = "ssort"
-version = "0.16.0"
+version = "0.17.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pathspec" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7a/c0/696b3c20b58f4a536845bbfded3be1d7a2b99e622ac51755e402c43729f0/ssort-0.16.0.tar.gz", hash = "sha256:1e7222cf7ffbbb0523d88fe1931a36b0bbd7f478d2964feb25be3621c52a981f", size = 23252, upload-time = "2025-12-07T02:20:00.092Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1a/6d/635cb5cf18f84f514ff085d7856bbc293f4671e00c29b6648221106ead48/ssort-0.17.0.tar.gz", hash = "sha256:acfb38409476520c3e25541c282f7cef92017900d859f6b12bea48da4334b194", size = 23363, upload-time = "2026-08-03T12:06:45.674Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5c/45/a23b1c13f2416e060af4d90e8407a350d5da7ad1ccf33e6eb9cbaaf7b363/ssort-0.16.0-py3-none-any.whl", hash = "sha256:013d57d4a0e4bde896afbcaa1e9e98a6829bf1b63ddcccecfcb7e64336921bba", size = 27683, upload-time = "2025-12-07T02:19:59.139Z" },
+    { url = "https://files.pythonhosted.org/packages/82/0b/ba965b79d65aecf00b12e8de7c98a46f62d2c575f55b576105010b152ef4/ssort-0.17.0-py3-none-any.whl", hash = "sha256:acb57f75cf9521d80a3cf1572ad4cdb969b28d08d8c4c08957c91517c5dd5d93", size = 27799, upload-time = "2026-08-03T12:06:44.581Z" },
 ]
 
 [[package]]

@@ -11,13 +11,11 @@ license = "MIT"
 license-files = ["LICEN[CS]E*"]
 keywords = ["telegram-bot", "sms", "sms-messages", "gsm", "gsm-modem"]
 dependencies = [
+  "gsm-sms[client]==0.1.0",
   "logfire[system-metrics,httpx]>=4.25.0",
   "pydantic>=2.12.5",
   "pydantic-extra-types[phonenumbers]>=2.11.0",
   "pydantic-settings>=2.13.1",
-  "pyserial>=3.5",
-  "pyserial-asyncio>=0.6",
-  "python-messaging>=0.5.13",
   "python-telegram-bot>=22.6",
 ]
 classifiers = [
@@ -58,6 +56,9 @@ src = ["app"]
 
 # https://docs.astral.sh/ruff/settings/#lint
 [tool.ruff.lint]
+ignore = [
+  "COM812", # conflicts with the Ruff formatter
+]
 select = [
   'F',     # flake8
   'I',     # isort
@@ -79,7 +80,6 @@ select = [
   'W',    # pycodestyle (warnings)
   'E',    # pycodestyle (errors)
   'N',    # pep8-naming
-  'PT',   # flake8-pytest-style
   'PL',   # pylint
   'FURB', # refurb
   'RUF',  # ruff-specific rules

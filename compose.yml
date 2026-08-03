@@ -1,10 +1,33 @@
 services:
+  gateway:
+    image: ghcr.io/jag-k/gsm-sms-gateway:latest
+    restart: unless-stopped
+    devices:
+      - /dev/ttyUSB0:/dev/ttyUSB0
+    environment:
+      MODEM__SERIAL_PORT: /dev/ttyUSB0
+      MODEM__BAUD_RATE: "115200"
+      MODEM__SMS_STORAGE: SM
+      JOURNAL__DATABASE_PATH: /data/gateway.sqlite3
+    volumes:
+      - ./gateway-data:/data
+    networks:
+      - gsm-sms
+
   sms:
     image: ghcr.io/jag-k/gsm-sms-telegram-bot:latest
     restart: unless-stopped
+    depends_on:
+      - gateway
     volumes:
       - ./data:/data
-    devices:
-      - /dev/ttyUSB0:/dev/ttyUSB0
     env_file:
       - .env
+    environment:
+      MODEM__GATEWAY_URL: http://gateway:8000
+    networks:
+      - gsm-sms
+
+networks:
+  gsm-sms:
+    name: gsm-sms-network

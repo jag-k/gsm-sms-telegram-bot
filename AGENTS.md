@@ -7,8 +7,8 @@
 - Type check: `uv run ty check src/`
 - Run checks (all): `uv run pre-commit run --all-files`
 
-> **Note:** The bot cannot be run locally — it requires a physical GSM modem connected to a Raspberry Pi.
-> Changes can only be tested on the Raspberry Pi after the container image is built and deployed there.
+> **Note:** The bot requires a running `gsm-sms-gateway`; it never opens the physical modem itself.
+> End-to-end modem behavior can only be tested on the Raspberry Pi after the gateway image is deployed there.
 > Do NOT push to GitHub or trigger any deployment — that is the developer's responsibility.
 
 ## Code Style Guidelines
@@ -26,11 +26,7 @@
 ## Performance Preferences
 
 - Prefer simplicity to complex optimization patterns
-- Minimize unnecessary waiting times in modem communication:
-    - Use fixed, minimal timeouts instead of adaptive polling when possible
-    - Default delay for AT commands: 0.1s (only when required)
-    - Use simple, linear approaches for serial device communication
-- GSM modem is a serial device - process one command at a time
+- Keep the bot as a REST/SSE consumer; serial and AT behavior belongs to `gsm-sms-gateway` and `gsm-sms`
 - Straight-line code is preferred over complex control flow
 - Aim for readability and maintainability over clever optimizations
 
@@ -57,14 +53,4 @@
             - `commands.py`: `/start`, `/clear`, `/rebuild` commands, `set_bot_commands`
             - `send.py`: `/send` conversation flow, contact handling
             - `messages.py`: Thread message and SMS reply handlers
-    - `sms_reader/`: GSM modem and SMS handling
-        - `facade.py`: `GSMModem` — public facade that composes all modem components
-        - `modem.py`: `ModemController` — AT command execution
-        - `transport.py`: `ModemTransport` — serial connection and `ModemConnectionLostError`
-        - `monitor.py`: `SMSMonitor` — polls modem for incoming SMS
-        - `message_queue.py`: `MessageQueue` — async queue for incoming messages
-        - `sms_reader.py`: `SMSReader` — parses raw AT responses into SMS models
-        - `sms_sender.py`: `SMSSender` — sends outgoing SMS via modem
-        - `models.py`: Data models for SMS and modem operations
-        - `consts.py`: Constants for timeouts and configurations
-        - `utils.py`: Utility functions for SMS processing
+    - `gsm_sms.client`: optional package client used for gateway REST/SSE
